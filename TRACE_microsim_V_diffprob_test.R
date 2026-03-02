@@ -560,7 +560,8 @@ ICER
 
 ## @knitr micro_run_microSimV_diagram
 
-DiagrammeR::grViz("
+if (requireNamespace("DiagrammeR", quietly = TRUE)) {
+  DiagrammeR::grViz("
   digraph flowchart {
     node [fontname = 'Helvetica', shape = box, style=filled, fillcolor='grey', fontsize=16]
     edge [fontname = 'Helvetica']
@@ -589,4 +590,7 @@ DiagrammeR::grViz("
     check_cycles -> summarize_results [label = 'Yes']
     summarize_results -> return_results
   }
-")
+  ")
+} else {
+  message("DiagrammeR package not installed. Flowchart skipped.")
+}
