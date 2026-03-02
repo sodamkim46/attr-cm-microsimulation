@@ -36,7 +36,7 @@ hospV <- function(
 # ------------------------------------------------------------------------------
 
 ## Run Microsimulation function (Modified for Hospitalization)
-run_microSimV_st <- function(
+run_microSimV_hosp<- function(
     v_starting_states,
     num_i,
     num_cycles,
