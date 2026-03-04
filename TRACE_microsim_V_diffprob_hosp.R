@@ -1,4 +1,4 @@
-# Vectorised Healthy-Sick-Dead microsimulation model
+# Vectorised ATTR-CM microsimulation model with hospitalization
 
 # clear R's session memory (Global Environment)
 rm(list = ls())
@@ -414,7 +414,7 @@ run_microSimV_hosp<- function(
 
 # Define model inputs
 ## General parameters
-num_i               <- 1e6               # number of simulated individuals
+num_i               <- 1e5               # number of simulated individuals
 num_cycles          <- 50                # time horizon if each cycle is a year long
 cycle_length        <- 0.5               # length of cycle (in years)
 seed                <- 1234              # random number generator state
