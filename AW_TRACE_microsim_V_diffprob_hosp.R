@@ -82,7 +82,7 @@ update_probsV <- function(
 
 ## Sample Health States function
 ### This function identifies the health state each individual will transition
-### to in the next model cycle
+### to in the next model cycle.
 sampleV <- function(
     m_trans_probs,
     v_states_names) {
