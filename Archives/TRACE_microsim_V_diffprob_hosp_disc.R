@@ -7,7 +7,12 @@ rm(list = ls())
 
 # Helper function to calculate transition matrix for a given set of parameters
 # This extracts the logic from the original update_probsV so it can be reused for different arms
-get_m_probs <- function(l_trans_probs, v_occupied_state, v_time_in_state, cycle_length, v_states_names) {
+get_m_probs <- function(
+  l_trans_probs, 
+  v_occupied_state, 
+  v_time_in_state, 
+  cycle_length, 
+  v_states_names) {
   with(
     data = l_trans_probs,
     expr = {
@@ -93,22 +98,54 @@ update_probsV_disc <- function(
 }
 
 ## Sample Health States function (Unchanged)
-sampleV <- function(m_trans_probs, v_states_names) {
-  m_upper_tri <- upper.tri(x = diag(ncol(m_trans_probs)), diag = TRUE)
+### This function identifies the health state each individual will transition
+### to in the next model cycle
+
+sampleV <- function(m_trans_probs, 
+  v_states_names) {
+  
+  # create an upper triangular matrix of ones
+  m_upper_tri <- upper.tri(
+    x = diag(ncol(m_trans_probs)), 
+    diag = TRUE
+  )
+
+  # create matrix with row-wise cumulative transition probabilities
   m_cum_probs <- m_trans_probs %*% m_upper_tri
   colnames(m_cum_probs) <- v_states_names
+
+  # ensure that the maximum cumulative probabilities are equal to 1
   if (any(m_cum_probs[, ncol(m_cum_probs)] > 1.0000001)) { # Slight tolerance
     stop("Error in multinomial sampling: probabilities do not sum to 1")
   }
+
+  # sample random values from Uniform standard distribution for each individual
   v_rand_values <- runif(n = nrow(m_trans_probs))
-  m_rand_values <- matrix(data = rep(x = v_rand_values, each = length(v_states_names)), nrow = nrow(m_trans_probs), ncol = length(v_states_names), byrow = TRUE)
-  m_transitions <- m_rand_values > m_cum_probs
+
+  # repeat each sampled value to have as many copies as the number of states
+  m_rand_values <- matrix(
+    data = rep(
+      x = v_rand_values, 
+      each = length(v_states_names)), 
+      nrow = nrow(m_trans_probs), 
+      ncol = length(v_states_names), 
+      byrow = TRUE
+    )
+  
+  # identify transitions, compare random samples to cumulative probabilities
+  m_transitions <- m_rand_values > m_cum_probs # transitions from first state
+
+  # sum transitions to identify health state in next cycle
   v_transitions <- rowSums(m_transitions)
+
+  # sum transitions to identify health state in next cycle
   v_health_states <- v_states_names[1 + v_transitions]
   return(v_health_states)
 }
 
 ## Calculate Costs function (Modified for Discontinuation)
+### This function estimates the costs at every cycle based on the health state
+### occupied by each individuals at cycle 't' and relevant individuals features
 calc_costsV_disc <- function (
     v_occupied_state,
     v_states_costs_arm, # Costs including drug
@@ -144,18 +181,38 @@ calc_costsV_disc <- function (
 }
 
 ## Calculate Health Outcomes function (Unchanged)
-calc_effsV <- function (v_occupied_state, v_states_utilities, m_indi_features, v_util_coeffs, v_util_t_decs, v_time_in_state, cycle_length = 1) {
+### This function estimates the Quality Adjusted Life Years (QALYs) at every
+### cycle based on the health state occupied by each individuals at cycle 't',
+### time spent in the states and the cycle_length (measured in years)
+calc_effsV <- function (
+  v_occupied_state, 
+  v_states_utilities, 
+  m_indi_features, 
+  v_util_coeffs, 
+  v_util_t_decs, 
+  v_time_in_state, 
+  cycle_length = 1) {
+  
+# calculate individual-specific utility decrements based on utilities regression coefficients
   v_ind_decrement <- (m_indi_features %*% v_util_coeffs)[,1]
+
+# calculate time-dependent state-specific utility decrements
   time_decrement <- rep(0, length(v_occupied_state))
   time_decrement[v_occupied_state == "NYHA3"] <- v_util_t_decs["NYHA3 or 4"] * v_time_in_state[v_occupied_state == "NYHA3"]
   time_decrement[v_occupied_state == "NYHA4"] <- v_util_t_decs["NYHA3 or 4"] * v_time_in_state[v_occupied_state == "NYHA4"]
+  
+# estimate total decrements
   decrement <- v_ind_decrement + time_decrement
+
+  # estimate utilities based on occupied state 
   v_state_utility <- rep(NA, length(v_occupied_state))
   v_state_utility[v_occupied_state == "NYHA1"]  <- v_states_utilities["NYHA1"]
   v_state_utility[v_occupied_state == "NYHA2"]  <- v_states_utilities["NYHA2"]
   v_state_utility[v_occupied_state == "NYHA3"]  <- v_states_utilities["NYHA3"]  + decrement[v_occupied_state == "NYHA3"]
   v_state_utility[v_occupied_state == "NYHA4"]  <- v_states_utilities["NYHA4"]  + decrement[v_occupied_state == "NYHA4"]
   v_state_utility[v_occupied_state == "Death"]  <- v_states_utilities["Death"]
+  
+  # calculate Quality Adjusted Life Years (QALYs)
   QALYs <-  v_state_utility * cycle_length
   return(QALYs)
 }
@@ -332,13 +389,24 @@ run_microSimV_hosp_disc <- function(
   v_c_dsc_wts <- calc_discount_wts(discount_rate_costs, num_cycles, cycle_length)
   v_e_dsc_wts <- calc_discount_wts(discount_rate_QALYs, num_cycles, cycle_length)
   
-  v_total_costs <- rowSums(m_Costs)
-  v_total_qalys <- rowSums(m_Effs)
+  # Apply Life-Table Correction to Undiscounted Costs/QALYs
+  # Logic: (Current + Next) / 2. Vectorized for matrices: (M[, -last] + M[, -1]) / 2
+  m_Costs_LT <- (m_Costs[, -ncol(m_Costs)] + m_Costs[, -1]) / 2
+  m_Effs_LT  <- (m_Effs[, -ncol(m_Effs)]  + m_Effs[, -1]) / 2
+  
+  v_total_costs <- rowSums(m_Costs_LT)
+  v_total_qalys <- rowSums(m_Effs_LT)
   mean_costs    <- mean(v_total_costs)
   mean_qalys    <- mean(v_total_qalys)
   
-  v_total_Dcosts <- m_Costs %*% v_c_dsc_wts
-  v_total_Dqalys <- m_Effs  %*% v_e_dsc_wts
+  # Apply Life-Table Correction to Discounted Costs/QALYs
+  # First, apply discount weights to the raw matrices (broadcast column-wise)
+  m_Costs_D <- t(t(m_Costs) * v_c_dsc_wts)
+  m_Effs_D  <- t(t(m_Effs)  * v_e_dsc_wts)
+  
+  # Then apply correction to the discounted values and sum
+  v_total_Dcosts <- rowSums((m_Costs_D[, -ncol(m_Costs_D)] + m_Costs_D[, -1]) / 2)
+  v_total_Dqalys <- rowSums((m_Effs_D[, -ncol(m_Effs_D)]  + m_Effs_D[, -1]) / 2)
   mean_Dcosts    <- mean(v_total_Dcosts)
   mean_Dqalys    <- mean(v_total_Dqalys)
   
@@ -547,3 +615,41 @@ which.max(c("TTR stabilizers" = nb_st, "TTR silencers" = nb_si))
 
 ICER <- (res_st$mean_Dcosts - res_si$mean_Dcosts)/(res_st$mean_Dqalys - res_si$mean_Dqalys)
 ICER
+#------------------------------------------------------------------------------#
+
+## @knitr micro_run_microSimV_diagram
+
+if (requireNamespace("DiagrammeR", quietly = TRUE)) {
+  DiagrammeR::grViz("
+  digraph flowchart {
+    node [fontname = 'Helvetica', shape = box, style=filled, fillcolor='grey', fontsize=16]
+    edge [fontname = 'Helvetica']
+
+    input [shape = box, label = 'Inputs: v_starting_states, num_i, num_cycles, m_indi_features, v_states_names, v_states_costs, v_cost_coeffs, v_states_utilities, v_util_coeffs, v_util_t_decs, l_trans_probs, cycle_length, starting_seed', style=filled, fillcolor='yellow', width=3.5]
+    initialize_matrices [label = 'Initialize m_States, m_Costs, m_Effs', style=filled, fillcolor='palegreen']
+    calc_initial_costs [label = 'Set seed, get starting health state, and calculate initial costs and QALYs', style=filled, fillcolor='palegreen']
+    loop_cycles [shape = diamond, style=filled, fillcolor='skyblue', fontsize=24, fontname='Helvetica-Bold', label = 'For each cycle t']
+    update_probs [label = 'Update transition probabilities for cycle (t)', style=filled, fillcolor='palegreen']
+    sample_state [label = 'Sample health state for cycle (t + 1)', style=filled, fillcolor='palegreen']
+    calculate_cycle_costs [label = 'Calculate payoffs (costs and QALYs) for cycle (t + 1)', style=filled, fillcolor='palegreen']
+    update_time [label = 'Update time in state for cycle (t + 1)', style=filled, fillcolor='palegreen']
+    update_age [label = 'Advance age if alive for cycle (t + 1)', style=filled, fillcolor='palegreen']
+    check_cycles [label = 'Was this the last cycle?', shape = diamond, style=filled, fillcolor='skyblue', fontsize=24, fontname='Helvetica-Bold']
+    summarize_results [label = 'Discount and summarize costs and QALYs', style=filled, fillcolor='palegreen']
+    return_results [shape = ellipse, label = 'Return results', style=filled, fillcolor='yellow']
+
+    input -> initialize_matrices
+    initialize_matrices -> calc_initial_costs
+    calc_initial_costs -> loop_cycles
+    loop_cycles -> update_probs
+    update_probs -> sample_state
+    sample_state ->  update_time -> update_age -> calculate_cycle_costs
+    calculate_cycle_costs -> check_cycles
+    check_cycles -> loop_cycles [label = 'No\nNext cycle']
+    check_cycles -> summarize_results [label = 'Yes']
+    summarize_results -> return_results
+  }
+  ")
+} else {
+  message("DiagrammeR package not installed. Flowchart skipped.")
+}
