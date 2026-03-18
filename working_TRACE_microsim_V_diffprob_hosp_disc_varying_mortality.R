@@ -7,65 +7,89 @@ rm(list = ls())
 
 # Helper function to calculate transition matrix for a given set of parameters
 # This extracts the logic from the original update_probsV so it can be reused for different arms
+# [MODIFIED] to handle age/sex-dependent background mortality
 get_m_probs <- function(
-  l_trans_probs, 
-  v_occupied_state, 
-  v_time_in_state, 
-  cycle_length, 
-  v_states_names) {
-  with(
-    data = l_trans_probs,
-    expr = {
-      
-      # update probabilities of death after first converting them to rates and applying the rate ratio
-      p_Dto1  <- 0
-      p_Dto2  <- 0
-      p_Dto3  <- 0
-      p_Dto4  <- 0
-      p_DtoD  <- 1
-      
-      p_1toD  <- rr_HF*p_HtoD
-      
-      r_1toD  <- -log(1- p_1toD)        #rate of death in NYHA1
-      r_2toD  <-  rr_2v1*r_1toD         #rate of death in NYHA2
-      r_3toD  <-  rr_3v1*r_1toD         #rate of death in NYHA2
-      r_4toD  <-  rr_4v1*r_1toD         #rate of death in NYHA2
-      
-      p_2toD  <-  1 - exp(-r_2toD*cycle_length)      #probability to die in NYHA2
-      
-      # calculate p_S1D conditional on current state and duration of being sick
-      p_3toD  <-  1 - exp(-r_3toD*cycle_length*(1 + v_time_in_state[v_occupied_state == "NYHA3"] * rp_sv))      #probability to die in NYHA3
-      p_4toD  <-  1 - exp(-r_4toD*cycle_length*(1 + v_time_in_state[v_occupied_state == "NYHA4"] * rp_sv))      #probability to die in NYHA4
-      
-      p_1toD  <- rep(p_1toD, length(which(v_occupied_state == "NYHA1")))
-      p_2toD  <- rep(p_2toD, length(which(v_occupied_state == "NYHA2")))
-      
-      p_Dto1  <- rep(0, length(v_occupied_state[v_occupied_state == "Death"]))
-      p_Dto2  <- rep(0, length(v_occupied_state[v_occupied_state == "Death"]))
-      p_Dto3  <- rep(0, length(v_occupied_state[v_occupied_state == "Death"]))
-      p_Dto4  <- rep(0, length(v_occupied_state[v_occupied_state == "Death"]))
-      p_DtoD  <- rep(1, length(v_occupied_state[v_occupied_state == "Death"]))
-      
-      # Create a state transition probabilities matrix
-      m_probs <- matrix(
-        nrow = length(v_time_in_state), # a row for each individual
-        ncol = length(v_states_names),  # a column for each state
-        dimnames = list(
-          v_occupied_state,             # name each row based on the occupied state
-          v_states_names                # give each column one of the states names
-        )
-      )
-      
-      # update m_probs with the appropriate probabilities
-      m_probs[v_occupied_state == "NYHA1", ] <- cbind(p_1to1*(1-p_1toD), p_1to2*(1-p_1toD), p_1to3*(1-p_1toD), p_1to4*(1-p_1toD), p_1toD) # transition probabilities when in NYHA1
-      m_probs[v_occupied_state == "NYHA2", ] <- cbind(p_2to1*(1-p_2toD), p_2to2*(1-p_2toD), p_2to3*(1-p_2toD), p_2to4*(1-p_2toD), p_2toD) # transition probabilities when in NYHA2
-      m_probs[v_occupied_state == "NYHA3", ] <- cbind(p_3to1*(1-p_3toD), p_3to2*(1-p_3toD), p_3to3*(1-p_3toD), p_3to4*(1-p_3toD), p_3toD) # transition probabilities when in NYHA3
-      m_probs[v_occupied_state == "NYHA4", ] <- cbind(p_4to1*(1-p_4toD), p_4to2*(1-p_4toD), p_4to3*(1-p_4toD), p_4to4*(1-p_4toD), p_4toD) # transition probabilities when in NYHA4
-      m_probs[v_occupied_state == "Death", ] <- cbind(p_Dto1, p_Dto2, p_Dto3, p_Dto4, p_DtoD)                                            # transition probabilities when dead
-      
-      return(m_probs)
-    }
-  )
+    l_trans_probs,
+    v_occupied_state,
+    cycle_length,
+    v_states_names,
+    m_indi_features,
+    params_gompertz_sex) {
+  
+  num_i <- nrow(m_indi_features)
+  m_probs <- matrix(0,
+                    nrow = num_i,
+                    ncol = length(v_states_names),
+                    dimnames = list(NULL, v_states_names))
+  
+  # Extract transition probabilities for non-death states
+  p_1to1 <- l_trans_probs$p_1to1; p_1to2 <- l_trans_probs$p_1to2; p_1to3 <- l_trans_probs$p_1to3; p_1to4 <- l_trans_probs$p_1to4
+  p_2to1 <- l_trans_probs$p_2to1; p_2to2 <- l_trans_probs$p_2to2; p_2to3 <- l_trans_probs$p_2to3; p_2to4 <- l_trans_probs$p_2to4
+  p_3to1 <- l_trans_probs$p_3to1; p_3to2 <- l_trans_probs$p_3to2; p_3to3 <- l_trans_probs$p_3to3; p_3to4 <- l_trans_probs$p_3to4
+  p_4to1 <- l_trans_probs$p_4to1; p_4to2 <- l_trans_probs$p_4to2; p_4to3 <- l_trans_probs$p_4to3; p_4to4 <- l_trans_probs$p_4to4
+  
+  # Extract hazard ratios for mortality
+  rr_HF  <- l_trans_probs$rr_HF
+  rr_2v1 <- l_trans_probs$rr_2v1
+  rr_3v1 <- l_trans_probs$rr_3v1
+  rr_4v1 <- l_trans_probs$rr_4v1
+  
+  # 1. Calculate age- and sex-specific background mortality HAZARD (annual) from Gompertz
+  v_age <- m_indi_features[, "age"]
+  h_H <- params_gompertz_sex$shape * exp(params_gompertz_sex$rate * v_age)
+  
+  # 2. Calculate state-specific mortality PROBABILITIES for the cycle
+  # Apply hazard ratios to the background hazard to get state-specific annual hazards
+  h_1 <- h_H * rr_HF
+  h_2 <- h_1 * rr_2v1
+  h_3 <- h_1 * rr_3v1
+  h_4 <- h_1 * rr_4v1
+  
+  # Convert annual hazards to probabilities for the current cycle length
+  p_1toD <- 1 - exp(-h_1 * cycle_length)
+  p_2toD <- 1 - exp(-h_2 * cycle_length)
+  p_3toD <- 1 - exp(-h_3 * cycle_length) # rp_sv logic removed
+  p_4toD <- 1 - exp(-h_4 * cycle_length) # rp_sv logic removed
+  
+  # Ensure probabilities are capped at 1
+  p_1toD[p_1toD > 1] <- 1; p_2toD[p_2toD > 1] <- 1
+  p_3toD[p_3toD > 1] <- 1; p_4toD[p_4toD > 1] <- 1
+  
+  # 3. Populate the transition matrix based on current state
+  idx_nyha1 <- which(v_occupied_state == "NYHA1"); idx_nyha2 <- which(v_occupied_state == "NYHA2")
+  idx_nyha3 <- which(v_occupied_state == "NYHA3"); idx_nyha4 <- which(v_occupied_state == "NYHA4")
+  idx_death <- which(v_occupied_state == "Death")
+  
+  # Probabilities to non-death states are scaled by (1 - p_death)
+  if (length(idx_nyha1) > 0) {
+    scaler <- 1 - p_1toD[idx_nyha1]
+    m_probs[idx_nyha1, "NYHA1"] <- p_1to1 * scaler; m_probs[idx_nyha1, "NYHA2"] <- p_1to2 * scaler
+    m_probs[idx_nyha1, "NYHA3"] <- p_1to3 * scaler; m_probs[idx_nyha1, "NYHA4"] <- p_1to4 * scaler
+    m_probs[idx_nyha1, "Death"] <- p_1toD[idx_nyha1]
+  }
+  if (length(idx_nyha2) > 0) {
+    scaler <- 1 - p_2toD[idx_nyha2]
+    m_probs[idx_nyha2, "NYHA1"] <- p_2to1 * scaler; m_probs[idx_nyha2, "NYHA2"] <- p_2to2 * scaler
+    m_probs[idx_nyha2, "NYHA3"] <- p_2to3 * scaler; m_probs[idx_nyha2, "NYHA4"] <- p_2to4 * scaler
+    m_probs[idx_nyha2, "Death"] <- p_2toD[idx_nyha2]
+  }
+  if (length(idx_nyha3) > 0) {
+    scaler <- 1 - p_3toD[idx_nyha3]
+    m_probs[idx_nyha3, "NYHA1"] <- p_3to1 * scaler; m_probs[idx_nyha3, "NYHA2"] <- p_3to2 * scaler
+    m_probs[idx_nyha3, "NYHA3"] <- p_3to3 * scaler; m_probs[idx_nyha3, "NYHA4"] <- p_3to4 * scaler
+    m_probs[idx_nyha3, "Death"] <- p_3toD[idx_nyha3]
+  }
+  if (length(idx_nyha4) > 0) {
+    scaler <- 1 - p_4toD[idx_nyha4]
+    m_probs[idx_nyha4, "NYHA1"] <- p_4to1 * scaler; m_probs[idx_nyha4, "NYHA2"] <- p_4to2 * scaler
+    m_probs[idx_nyha4, "NYHA3"] <- p_4to3 * scaler; m_probs[idx_nyha4, "NYHA4"] <- p_4to4 * scaler
+    m_probs[idx_nyha4, "Death"] <- p_4toD[idx_nyha4]
+  }
+  if (length(idx_death) > 0) {
+    m_probs[idx_death, "Death"] <- 1
+  }
+  
+  return(m_probs)
 }
 
 ## Update Transition Probability function (Modified for Discontinuation)
@@ -75,14 +99,15 @@ update_probsV_disc <- function(
     l_trans_probs_arm, # Probabilities for those on treatment
     l_trans_probs_soc, # Probabilities for those discontinued (SoC)
     v_discontinued,    # Binary vector: 1 if discontinued, 0 otherwise
-    v_time_in_state,
+    m_indi_features,   # For age/sex to calculate mortality
+    params_gompertz_sex, # Sex-specific gompertz parameters
     cycle_length = 0.5) {
   
   # 1. Calculate probabilities assuming everyone is on treatment
-  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, v_time_in_state, cycle_length, v_states_names)
+  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex)
   
   # 2. Calculate probabilities assuming everyone is on SoC
-  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, v_time_in_state, cycle_length, v_states_names)
+  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex)
   
   # 3. Combine based on discontinuation status
   # v_discontinued is a vector of length N. We multiply to broadcast across columns.
@@ -272,6 +297,7 @@ run_microSimV_hosp_disc <- function(
     l_trans_probs_arm,  # Probs for treatment arm
     l_trans_probs_soc,  # Probs for SoC
     p_disc,             # Probability of discontinuation per cycle
+    params_gompertz_sex,# Sex-specific Gompertz parameters for background mortality
     v_hosp_probs,     
     v_hosp_costs,     
     v_hosp_disutils,  
@@ -337,7 +363,8 @@ run_microSimV_hosp_disc <- function(
       l_trans_probs_arm = l_trans_probs_arm,
       l_trans_probs_soc = l_trans_probs_soc,
       v_discontinued    = v_discontinued,
-      v_time_in_state   = v_time_in_state,
+      m_indi_features   = m_indi_features,
+      params_gompertz_sex = params_gompertz_sex,
       cycle_length      = cycle_length
     )
     
@@ -360,7 +387,8 @@ run_microSimV_hosp_disc <- function(
     stayed                   <- m_States[, t] == m_States[, t + 1] 
     v_time_in_state[stayed]  <- v_time_in_state[stayed] + 1        
     v_time_in_state[!stayed] <- 1                                  
-    m_indi_features[, "age"] <- m_indi_features[, "age"] + 1
+    # Age individuals by the cycle length
+    m_indi_features[, "age"] <- m_indi_features[, "age"] + cycle_length
     
     # 6. Calculate Costs
     # Uses v_discontinued to remove drug costs if applicable
@@ -444,31 +472,50 @@ discount_rate_QALYs <- 0.03
 ## Population characteristics
 mean_age            <- 77                
 sd_age              <- 5                 
-set.seed(seed)                           
-m_indi_features     <- cbind("age" = rnorm(n = num_i, mean = mean_age, sd = sd_age))
+set.seed(seed)
+# Create separate populations for males and females to account for different mortality
+m_indi_features_male <- cbind(
+  "age" = rnorm(n = num_i, mean = mean_age, sd = sd_age)
+)
+m_indi_features_female <- cbind(
+  "age" = rnorm(n = num_i, mean = mean_age, sd = sd_age)
+)
 
 ## Health states
 v_states_names <- c("NYHA1","NYHA2", "NYHA3", "NYHA4", "Death")
 p_starting <- c(0.108, 0.72, 0.172, 0, 0)
 v_starting_states <- sample(x = v_states_names, size = num_i, replace = TRUE, prob = p_starting)
 
-## Transition probabilities (per cycle)
+## Transition and Mortality Parameters
 
-# Common Mortality Parameters
-p_HtoD  <- 0.00299                
+# --- Background Mortality Parameters (from workingTRACE_mortality_fitting.R) --- #
+# !!! IMPORTANT !!!
+# Please replace these placeholder values with the actual values from your fitting script output.
+params_gompertz <- list(
+  male = list(
+    shape = 0.1014027, 
+    rate  = 1.934313e-05    
+  ),
+  female = list(
+    shape = 0.1089245, 
+    rate  = 7.472652e-06     
+  )
+)
+
+# Hazard Ratios for mortality (relative to background mortality)
 rr_HF   <- 3.17                   
 rr_2v1  <- 1.78                   
 rr_3v1  <- 3.51                   
 rr_4v1  <- 5.74                   
-rp_sv   <- 0.2                       
+# NOTE: p_HtoD and rp_sv are removed as they are replaced by the Gompertz model
 
-# 1. Stabilizers
+# 1. Stabilizers (Probabilities of moving between non-death states)
 l_trans_probs_st <- list(
   "p_1to1" = 0.565, "p_1to2" = 0.392, "p_1to3" = 0.043, "p_1to4" = 0,
   "p_2to1" = 0.072, "p_2to2" = 0.751, "p_2to3" = 0.17,  "p_2to4" = 0.007,
   "p_3to1" = 0,     "p_3to2" = 0.29,  "p_3to3" = 0.678, "p_3to4" = 0.032,
   "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
-  "p_HtoD" = p_HtoD, "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1, "rp_sv" = rp_sv
+  "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1
 )
 
 # 2. Silencers
@@ -477,7 +524,7 @@ l_trans_probs_si <- list(
   "p_2to1" = 0.092, "p_2to2" = 0.771, "p_2to3" = 0.13,  "p_2to4" = 0.007,
   "p_3to1" = 0,     "p_3to2" = 0.30,  "p_3to3" = 0.668, "p_3to4" = 0.032,
   "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
-  "p_HtoD" = p_HtoD, "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1, "rp_sv" = rp_sv
+  "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1
 )
 
 # 3. Standard of Care (SoC) - For Discontinued
@@ -486,7 +533,7 @@ l_trans_probs_soc <- list(
   "p_2to1" = 0.062, "p_2to2" = 0.763, "p_2to3" = 0.175, "p_2to4" = 0,
   "p_3to1" = 0.039, "p_3to2" = 0.216, "p_3to3" = 0.706, "p_3to4" = 0.039,
   "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
-  "p_HtoD" = p_HtoD, "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1, "rp_sv" = rp_sv
+  "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1
 )
 
 ## Discontinuation Probabilities
@@ -556,13 +603,14 @@ v_hosp_disutils <- c("NYHA1" = 0.023, "NYHA2" = 0.01, "NYHA3" = 0.027, "NYHA4" =
 
 ### Running the simulation ###
 
-# Run the simulation:
-## For being treated with stabilizers
-res_st <- run_microSimV_hosp_disc(
+cat("\n--- Running Simulation for MALE Cohort ---\n")
+
+## Stabilizers vs SoC for MALES
+res_st_male <- run_microSimV_hosp_disc(
   v_starting_states   = v_starting_states,
   num_i               = num_i,
   num_cycles          = num_cycles,
-  m_indi_features     = m_indi_features,
+  m_indi_features     = m_indi_features_male,
   v_states_names      = v_states_names,
   v_states_costs_arm  = v_states_costs_st,
   v_states_costs_soc  = v_states_costs_soc,
@@ -573,21 +621,22 @@ res_st <- run_microSimV_hosp_disc(
   l_trans_probs_arm   = l_trans_probs_st,
   l_trans_probs_soc   = l_trans_probs_soc,
   p_disc              = p_disc_st,
+  params_gompertz_sex = params_gompertz$male,
   v_hosp_probs        = v_hosp_probs_st,
   v_hosp_costs        = v_hosp_costs,
   v_hosp_disutils     = v_hosp_disutils,
   discount_rate_costs = discount_rate_costs,
   discount_rate_QALYs = discount_rate_QALYs,
   cycle_length        = cycle_length,
-  starting_seed       = seed
+  starting_seed       = seed # Use same seed for comparability
 )
 
-## For being treated with silencers
-res_si <- run_microSimV_hosp_disc(
+## Silencers vs SoC for MALES
+res_si_male <- run_microSimV_hosp_disc(
   v_starting_states   = v_starting_states,
   num_i               = num_i,
   num_cycles          = num_cycles,
-  m_indi_features     = m_indi_features,
+  m_indi_features     = m_indi_features_male,
   v_states_names      = v_states_names,
   v_states_costs_arm  = v_states_costs_si,
   v_states_costs_soc  = v_states_costs_soc,
@@ -598,23 +647,89 @@ res_si <- run_microSimV_hosp_disc(
   l_trans_probs_arm   = l_trans_probs_si,
   l_trans_probs_soc   = l_trans_probs_soc,
   p_disc              = p_disc_si,
+  params_gompertz_sex = params_gompertz$male,
   v_hosp_probs        = v_hosp_probs_si,
   v_hosp_costs        = v_hosp_costs,
   v_hosp_disutils     = v_hosp_disutils,
   discount_rate_costs = discount_rate_costs,
   discount_rate_QALYs = discount_rate_QALYs,
   cycle_length        = cycle_length,
-  starting_seed       = seed
+  starting_seed       = seed # Use same seed for comparability
 )
 
-nb_st   <- res_st$mean_Dqalys   * wtp - res_st$mean_Dcosts
-nb_st
-nb_si   <- res_si$mean_Dqalys   * wtp - res_si$mean_Dcosts
-nb_si
-which.max(c("TTR stabilizers" = nb_st, "TTR silencers" = nb_si))
+cat("\n--- Running Simulation for FEMALE Cohort ---\n")
 
-ICER <- (res_st$mean_Dcosts - res_si$mean_Dcosts)/(res_st$mean_Dqalys - res_si$mean_Dqalys)
-ICER
+## Stabilizers vs SoC for FEMALES
+res_st_female <- run_microSimV_hosp_disc(
+  v_starting_states   = v_starting_states,
+  num_i               = num_i,
+  num_cycles          = num_cycles,
+  m_indi_features     = m_indi_features_female,
+  v_states_names      = v_states_names,
+  v_states_costs_arm  = v_states_costs_st,
+  v_states_costs_soc  = v_states_costs_soc,
+  v_cost_coeffs       = v_cost_coeffs,
+  v_states_utilities  = v_states_utilities,
+  v_util_coeffs       = v_util_coeffs,
+  v_util_t_decs       = v_util_t_decs,
+  l_trans_probs_arm   = l_trans_probs_st,
+  l_trans_probs_soc   = l_trans_probs_soc,
+  p_disc              = p_disc_st,
+  params_gompertz_sex = params_gompertz$female,
+  v_hosp_probs        = v_hosp_probs_st,
+  v_hosp_costs        = v_hosp_costs,
+  v_hosp_disutils     = v_hosp_disutils,
+  discount_rate_costs = discount_rate_costs,
+  discount_rate_QALYs = discount_rate_QALYs,
+  cycle_length        = cycle_length,
+  starting_seed       = seed # Use same seed for comparability
+)
+
+## Silencers vs SoC for FEMALES
+res_si_female <- run_microSimV_hosp_disc(
+  v_starting_states   = v_starting_states,
+  num_i               = num_i,
+  num_cycles          = num_cycles,
+  m_indi_features     = m_indi_features_female,
+  v_states_names      = v_states_names,
+  v_states_costs_arm  = v_states_costs_si,
+  v_states_costs_soc  = v_states_costs_soc,
+  v_cost_coeffs       = v_cost_coeffs,
+  v_states_utilities  = v_states_utilities,
+  v_util_coeffs       = v_util_coeffs,
+  v_util_t_decs       = v_util_t_decs,
+  l_trans_probs_arm   = l_trans_probs_si,
+  l_trans_probs_soc   = l_trans_probs_soc,
+  p_disc              = p_disc_si,
+  params_gompertz_sex = params_gompertz$female,
+  v_hosp_probs        = v_hosp_probs_si,
+  v_hosp_costs        = v_hosp_costs,
+  v_hosp_disutils     = v_hosp_disutils,
+  discount_rate_costs = discount_rate_costs,
+  discount_rate_QALYs = discount_rate_QALYs,
+  cycle_length        = cycle_length,
+  starting_seed       = seed # Use same seed for comparability
+)
+
+### Analyzing the results ###
+
+cat("\n--- MALE COHORT RESULTS ---\n")
+nb_st_male <- res_st_male$mean_Dqalys * wtp - res_st_male$mean_Dcosts
+nb_si_male <- res_si_male$mean_Dqalys * wtp - res_si_male$mean_Dcosts
+cat("Net Monetary Benefit (Stabilizers):", nb_st_male, "\n")
+cat("Net Monetary Benefit (Silencers):", nb_si_male, "\n")
+
+ICER_male <- (res_st_male$mean_Dcosts - res_si_male$mean_Dcosts) / (res_st_male$mean_Dqalys - res_si_male$mean_Dqalys)
+cat("ICER (Stabilizers vs Silencers):", ICER_male, "\n")
+
+cat("\n--- FEMALE COHORT RESULTS ---\n")
+nb_st_female <- res_st_female$mean_Dqalys * wtp - res_st_female$mean_Dcosts
+nb_si_female <- res_si_female$mean_Dqalys * wtp - res_si_female$mean_Dcosts
+cat("Net Monetary Benefit (Stabilizers):", nb_st_female, "\n")
+cat("Net Monetary Benefit (Silencers):", nb_si_female, "\n")
+
+ICER_female <- (res_st_female$mean_Dcosts - res_si_female$mean_Dcosts) / (res_st_female$mean_Dqalys - res_si_female$mean_Dqalys)
+cat("ICER (Stabilizers vs Silencers):", ICER_female, "\n")
 #------------------------------------------------------------------------------#
 
 ## @knitr micro_run_microSimV_diagram

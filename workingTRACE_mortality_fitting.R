@@ -1,14 +1,10 @@
-# Mortality Fitting Script using 2022 Actuarial Life Table Logic
-# Fits a Gompertz model using flexsurv
-
+# clear R's session memory (Global Environment)
 rm(list = ls())
 
-if (!require("flexsurv")) {
-  install.packages("flexsurv", repos = "https://cloud.r-project.org")
-}
+install.packages("flexsurv")
+install.packages("survminer")
 
-## load packages
-library(survival)
+library (survival)
 library(flexsurv)
 library(ggplot2)
 library(dplyr)
@@ -108,7 +104,14 @@ print(fit_female)
 
 # Plot the fits
 plot(fit_male, main = "Male: Gompertz Fit vs Actual", xlab = "Age", ylab = "Survival")
+# add legend
+legend("bottomleft", legend = c("Actual (Kaplan-Meier)", "Fitted (Gompertz)"), 
+       col = c("black", "red"), lty = 1, lwd = 2, bty = "n")
+
 plot(fit_female, main = "Female: Gompertz Fit vs Actual", xlab = "Age", ylab = "Survival")
+# add legend
+legend("bottomleft", legend = c("Actual (Kaplan-Meier)", "Fitted (Gompertz)"), 
+       col = c("black", "red"), lty = 1, lwd = 2, bty = "n")
 
 # 4. Extract and Save Parameters --------------------------------------------
 params <- list(
