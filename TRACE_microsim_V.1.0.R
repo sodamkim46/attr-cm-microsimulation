@@ -175,29 +175,24 @@ calc_costsV_disc <- function (
     v_occupied_state,
     v_states_costs_arm, # Costs including drug
     v_states_costs_soc, # Costs excluding drug (SoC)
-    m_indi_features,
-    v_cost_coeffs,
     v_discontinued) {
   
-  # calculate individual-specific costs based on costs regression coefficients
-  v_indi_costs <- m_indi_features %*% v_cost_coeffs
-  
   # Helper to calculate costs for a specific cost vector
-  calc_costs_internal <- function(states, base_costs, indi_costs) {
+  calc_costs_internal <- function(states, base_costs) {
     v_c <- rep(NA, length(states))
     v_c[states == "NYHA1"] <- base_costs["NYHA1"]
     v_c[states == "NYHA2"] <- base_costs["NYHA2"]
-    v_c[states == "NYHA3"] <- base_costs["NYHA3"] + indi_costs[states == "NYHA3"]
-    v_c[states == "NYHA4"] <- base_costs["NYHA4"] + indi_costs[states == "NYHA4"]
+    v_c[states == "NYHA3"] <- base_costs["NYHA3"]
+    v_c[states == "NYHA4"] <- base_costs["NYHA4"]
     v_c[states == "Death"] <- base_costs["Death"]
     return(v_c)
   }
   
   # Calculate costs assuming on treatment
-  v_costs_arm <- calc_costs_internal(v_occupied_state, v_states_costs_arm, v_indi_costs)
+  v_costs_arm <- calc_costs_internal(v_occupied_state, v_states_costs_arm)
   
   # Calculate costs assuming SoC (discontinued)
-  v_costs_soc <- calc_costs_internal(v_occupied_state, v_states_costs_soc, v_indi_costs)
+  v_costs_soc <- calc_costs_internal(v_occupied_state, v_states_costs_soc)
   
   # Combine
   v_final_costs <- v_costs_arm * (1 - v_discontinued) + v_costs_soc * v_discontinued
@@ -210,31 +205,16 @@ calc_costsV_disc <- function (
 ### cycle based on the health state occupied by each individuals at cycle 't',
 ### time spent in the states and the cycle_length (measured in years)
 calc_effsV <- function (
-  v_occupied_state, 
-  v_states_utilities, 
-  m_indi_features, 
-  v_util_coeffs, 
-  v_util_t_decs, 
-  v_time_in_state, 
+  v_occupied_state,
+  v_states_utilities,
   cycle_length = 1) {
   
-# calculate individual-specific utility decrements based on utilities regression coefficients
-  v_ind_decrement <- (m_indi_features %*% v_util_coeffs)[,1]
-
-# calculate time-dependent state-specific utility decrements
-  time_decrement <- rep(0, length(v_occupied_state))
-  time_decrement[v_occupied_state == "NYHA3"] <- v_util_t_decs["NYHA3 or 4"] * v_time_in_state[v_occupied_state == "NYHA3"]
-  time_decrement[v_occupied_state == "NYHA4"] <- v_util_t_decs["NYHA3 or 4"] * v_time_in_state[v_occupied_state == "NYHA4"]
-  
-# estimate total decrements
-  decrement <- v_ind_decrement + time_decrement
-
   # estimate utilities based on occupied state 
   v_state_utility <- rep(NA, length(v_occupied_state))
   v_state_utility[v_occupied_state == "NYHA1"]  <- v_states_utilities["NYHA1"]
   v_state_utility[v_occupied_state == "NYHA2"]  <- v_states_utilities["NYHA2"]
-  v_state_utility[v_occupied_state == "NYHA3"]  <- v_states_utilities["NYHA3"]  + decrement[v_occupied_state == "NYHA3"]
-  v_state_utility[v_occupied_state == "NYHA4"]  <- v_states_utilities["NYHA4"]  + decrement[v_occupied_state == "NYHA4"]
+  v_state_utility[v_occupied_state == "NYHA3"]  <- v_states_utilities["NYHA3"]
+  v_state_utility[v_occupied_state == "NYHA4"]  <- v_states_utilities["NYHA4"]
   v_state_utility[v_occupied_state == "Death"]  <- v_states_utilities["Death"]
   
   # calculate Quality Adjusted Life Years (QALYs)
@@ -290,10 +270,7 @@ run_microSimV_hosp_disc <- function(
     v_states_names,
     v_states_costs_arm, # Costs for the treatment arm
     v_states_costs_soc, # Costs for SoC (discontinued)
-    v_cost_coeffs,
     v_states_utilities,
-    v_util_coeffs,
-    v_util_t_decs,
     l_trans_probs_arm,  # Probs for treatment arm
     l_trans_probs_soc,  # Probs for SoC
     p_disc,             # Probability of discontinuation per cycle
@@ -318,7 +295,6 @@ run_microSimV_hosp_disc <- function(
   v_discontinued <- rep(0, num_i)
   
   set.seed(starting_seed)
-  v_time_in_state <- rep(1, times = num_i)
   m_States[, 1] <- v_starting_states
   m_Hosp[, 1] <- 0 
   
@@ -327,22 +303,24 @@ run_microSimV_hosp_disc <- function(
     v_occupied_state   = m_States[, 1],
     v_states_costs_arm = v_states_costs_arm,
     v_states_costs_soc = v_states_costs_soc,
-    m_indi_features    = m_indi_features,
-    v_cost_coeffs      = v_cost_coeffs,
     v_discontinued     = v_discontinued
   )
   
   m_Effs[, 1]   <- calc_effsV(
     v_occupied_state   = m_States[, 1],
     v_states_utilities = v_states_utilities,
-    m_indi_features    = m_indi_features,
-    v_util_coeffs      = v_util_coeffs,
-    v_util_t_decs      = v_util_t_decs,
-    v_time_in_state    = v_time_in_state,
     cycle_length       = cycle_length
   )
   
   for (t in 1:num_cycles) {
+    
+    # NEW: Select the appropriate transition probabilities for the current cycle
+    # Use time-varying probabilities for the first 5 cycles (up to 30 months)
+    # and the 30-month probabilities thereafter.
+    # The index is capped at the number of time-varying probability sets.
+    current_cycle_index <- min(t, length(l_trans_probs_arm))
+    l_trans_probs_soc_t <- l_trans_probs_soc[[current_cycle_index]] # NEW: Select time-dependent SoC probs
+    l_trans_probs_arm_t <- l_trans_probs_arm[[current_cycle_index]]
     
     # 1. Check for Discontinuation
     # Only those currently on treatment (v_discontinued == 0) and alive can discontinue
@@ -360,8 +338,8 @@ run_microSimV_hosp_disc <- function(
     m_trans_probs <- update_probsV_disc(
       v_states_names    = v_states_names,
       v_occupied_state  = m_States[, t],
-      l_trans_probs_arm = l_trans_probs_arm,
-      l_trans_probs_soc = l_trans_probs_soc,
+      l_trans_probs_arm = l_trans_probs_arm_t, # Use time-dependent probabilities
+      l_trans_probs_soc = l_trans_probs_soc_t, # NEW: Use time-dependent SoC probabilities
       v_discontinued    = v_discontinued,
       m_indi_features   = m_indi_features,
       params_gompertz_sex = params_gompertz_sex,
@@ -383,10 +361,13 @@ run_microSimV_hosp_disc <- function(
     )
     m_Hosp[, t + 1] <- l_hosp_results$hosp_ind
     
+# 4a. Update discontinuation status for patients entering NYHA4
+    # Patients who move to the NYHA4 state are considered to have discontinued treatment.
+    # This is a model assumption. Once discontinued, they remain so.
+    # This will affect their costs for the current cycle (step 6) and transition probabilities for the next cycle.
+    v_discontinued[m_States[, t + 1] == "NYHA4"] <- 1
+
     # 5. Update time in state and age
-    stayed                   <- m_States[, t] == m_States[, t + 1] 
-    v_time_in_state[stayed]  <- v_time_in_state[stayed] + 1        
-    v_time_in_state[!stayed] <- 1                                  
     # Age individuals by the cycle length
     m_indi_features[, "age"] <- m_indi_features[, "age"] + cycle_length
     
@@ -396,8 +377,6 @@ run_microSimV_hosp_disc <- function(
       v_occupied_state   = m_States[, t + 1],
       v_states_costs_arm = v_states_costs_arm,
       v_states_costs_soc = v_states_costs_soc,
-      m_indi_features    = m_indi_features,
-      v_cost_coeffs      = v_cost_coeffs,
       v_discontinued     = v_discontinued
     ) + l_hosp_results$costs
     
@@ -405,10 +384,6 @@ run_microSimV_hosp_disc <- function(
     m_Effs[, t + 1]   <- calc_effsV(
       v_occupied_state   = m_States[, t + 1],
       v_states_utilities = v_states_utilities,
-      m_indi_features    = m_indi_features,
-      v_util_coeffs      = v_util_coeffs,
-      v_util_t_decs      = v_util_t_decs,
-      v_time_in_state    = v_time_in_state,
       cycle_length       = cycle_length
     ) - l_hosp_results$disutils
   }
@@ -509,31 +484,111 @@ rr_3v1  <- 3.51
 rr_4v1  <- 5.74                   
 # NOTE: p_HtoD and rp_sv are removed as they are replaced by the Gompertz model
 
-# 1. Stabilizers (Probabilities of moving between non-death states)
-l_trans_probs_st <- list(
-  "p_1to1" = 0.565, "p_1to2" = 0.392, "p_1to3" = 0.043, "p_1to4" = 0,
-  "p_2to1" = 0.072, "p_2to2" = 0.751, "p_2to3" = 0.17,  "p_2to4" = 0.007,
-  "p_3to1" = 0,     "p_3to2" = 0.29,  "p_3to3" = 0.678, "p_3to4" = 0.032,
-  "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
-  "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1
+# NEW: Time-varying transition probabilities for treatment arms
+# A list of lists, where each inner list corresponds to a 6-month cycle.
+# Probabilities for cycles > 5 (after 30 months) will use the 5th set of probabilities.
+
+# 1. Stabilizers (Tafamidis) - Time-Varying
+l_trans_probs_st_tv <- list(
+  # Cycle 1 (6 months)
+  list("p_1to1" = 0.565, "p_1to2" = 0.392, "p_1to3" = 0.043, "p_1to4" = 0,
+       "p_2to1" = 0.072, "p_2to2" = 0.751, "p_2to3" = 0.17,  "p_2to4" = 0.007,
+       "p_3to1" = 0,     "p_3to2" = 0.29,  "p_3to3" = 0.678, "p_3to4" = 0.032,
+       "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1),
+  # Cycle 2 (12 months)
+  list("p_1to1" = 0.522, "p_1to2" = 0.478, "p_1to3" = 0,     "p_1to4" = 0,
+       "p_2to1" = 0.069, "p_2to2" = 0.758, "p_2to3" = 0.166, "p_2to4" = 0.007,
+       "p_3to1" = 0.019, "p_3to2" = 0.396, "p_3to3" = 0.566, "p_3to4" = 0.019,
+       "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1),
+  # Cycle 3 (18 months)
+  list("p_1to1" = 0.381, "p_1to2" = 0.476, "p_1to3" = 0.143, "p_1to4" = 0,
+       "p_2to1" = 0.096, "p_2to2" = 0.697, "p_2to3" = 0.207, "p_2to4" = 0,
+       "p_3to1" = 0.023, "p_3to2" = 0.273, "p_3to3" = 0.681, "p_3to4" = 0.023,
+       "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1),
+  # Cycle 4 (24 months)
+  list("p_1to1" = 0.5,   "p_1to2" = 0.3,   "p_1to3" = 0.15,  "p_1to4" = 0.05,
+       "p_2to1" = 0.103, "p_2to2" = 0.675, "p_2to3" = 0.214, "p_2to4" = 0.008,
+       "p_3to1" = 0,     "p_3to2" = 0.27,  "p_3to3" = 0.622, "p_3to4" = 0.108,
+       "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1),
+  # Cycle 5 (30 months) - This will be used for all subsequent cycles
+  list("p_1to1" = 0.368, "p_1to2" = 0.368, "p_1to3" = 0.211, "p_1to4" = 0.053,
+       "p_2to1" = 0.115, "p_2to2" = 0.598, "p_2to3" = 0.287, "p_2to4" = 0,
+       "p_3to1" = 0,     "p_3to2" = 0.3,   "p_3to3" = 0.633, "p_3to4" = 0.067,
+       "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1)
 )
 
-# 2. Silencers
-l_trans_probs_si <- list(
-  "p_1to1" = 0.570, "p_1to2" = 0.397, "p_1to3" = 0.033, "p_1to4" = 0,
-  "p_2to1" = 0.092, "p_2to2" = 0.771, "p_2to3" = 0.13,  "p_2to4" = 0.007,
-  "p_3to1" = 0,     "p_3to2" = 0.30,  "p_3to3" = 0.668, "p_3to4" = 0.032,
-  "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
-  "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1
+# 2. Silencers - Time-Varying (ARBITRARY PLACEHOLDER VALUES)
+# NOTE: These values are illustrative, created to be slightly more effective than stabilizers.
+l_trans_probs_si_tv <- list(
+  # Cycle 1 (6 months)
+  list("p_1to1" = 0.570, "p_1to2" = 0.397, "p_1to3" = 0.033, "p_1to4" = 0,
+       "p_2to1" = 0.092, "p_2to2" = 0.771, "p_2to3" = 0.13,  "p_2to4" = 0.007,
+       "p_3to1" = 0,     "p_3to2" = 0.30,  "p_3to3" = 0.668, "p_3to4" = 0.032,
+       "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1),
+  # Cycle 2 (12 months)
+  list("p_1to1" = 0.54, "p_1to2" = 0.46, "p_1to3" = 0,     "p_1to4" = 0,
+       "p_2to1" = 0.08, "p_2to2" = 0.77, "p_2to3" = 0.14,  "p_2to4" = 0.01,
+       "p_3to1" = 0.02, "p_3to2" = 0.40, "p_3to3" = 0.56,  "p_3to4" = 0.02,
+       "p_4to1" = 0,    "p_4to2" = 0,    "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1),
+  # Cycle 3 (18 months)
+  list("p_1to1" = 0.40, "p_1to2" = 0.47, "p_1to3" = 0.13,  "p_1to4" = 0,
+       "p_2to1" = 0.10, "p_2to2" = 0.71, "p_2to3" = 0.19,  "p_2to4" = 0,
+       "p_3to1" = 0.03, "p_3to2" = 0.28, "p_3to3" = 0.67,  "p_3to4" = 0.02,
+       "p_4to1" = 0,    "p_4to2" = 0,    "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1),
+  # Cycle 4 (24 months)
+  list("p_1to1" = 0.52, "p_1to2" = 0.29, "p_1to3" = 0.14,  "p_1to4" = 0.05,
+       "p_2to1" = 0.11, "p_2to2" = 0.69, "p_2to3" = 0.19,  "p_2to4" = 0.01,
+       "p_3to1" = 0.01, "p_3to2" = 0.28, "p_3to3" = 0.61,  "p_3to4" = 0.10,
+       "p_4to1" = 0,    "p_4to2" = 0,    "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1),
+  # Cycle 5 (30 months)
+  list("p_1to1" = 0.38, "p_1to2" = 0.36, "p_1to3" = 0.21,  "p_1to4" = 0.05,
+       "p_2to1" = 0.12, "p_2to2" = 0.61, "p_2to3" = 0.27,  "p_2to4" = 0,
+       "p_3to1" = 0.01, "p_3to2" = 0.31, "p_3to3" = 0.62,  "p_3to4" = 0.06,
+       "p_4to1" = 0,    "p_4to2" = 0,    "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1)
 )
 
-# 3. Standard of Care (SoC) - For Discontinued
-l_trans_probs_soc <- list(
-  "p_1to1" = 0.538, "p_1to2" = 0.462, "p_1to3" = 0,     "p_1to4" = 0,
-  "p_2to1" = 0.062, "p_2to2" = 0.763, "p_2to3" = 0.175, "p_2to4" = 0,
-  "p_3to1" = 0.039, "p_3to2" = 0.216, "p_3to3" = 0.706, "p_3to4" = 0.039,
-  "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
-  "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1
+# 3. Standard of Care (SoC) - Time-Varying
+l_trans_probs_soc_tv <- list(
+  # Cycle 1 (6 months)
+  list("p_1to1" = 0.538, "p_1to2" = 0.462, "p_1to3" = 0,     "p_1to4" = 0,
+       "p_2to1" = 0.062, "p_2to2" = 0.763, "p_2to3" = 0.175, "p_2to4" = 0,
+       "p_3to1" = 0.039, "p_3to2" = 0.216, "p_3to3" = 0.706, "p_3to4" = 0.039,
+       "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1),
+  # Cycle 2 (12 months)
+  list("p_1to1" = 0.273, "p_1to2" = 0.545, "p_1to3" = 0.182, "p_1to4" = 0,
+       "p_2to1" = 0.07,  "p_2to2" = 0.651, "p_2to3" = 0.267, "p_2to4" = 0.012,
+       "p_3to1" = 0,     "p_3to2" = 0.239, "p_3to3" = 0.696, "p_3to4" = 0.065,
+       "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1),
+  # Cycle 3 (18 months)
+  list("p_1to1" = 0.222, "p_1to2" = 0.556, "p_1to3" = 0.111, "p_1to4" = 0.111,
+       "p_2to1" = 0.039, "p_2to2" = 0.649, "p_2to3" = 0.299, "p_2to4" = 0.013,
+       "p_3to1" = 0.054, "p_3to2" = 0.243, "p_3to3" = 0.676, "p_3to4" = 0.027,
+       "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1),
+  # Cycle 4 (24 months)
+  list("p_1to1" = 0.125, "p_1to2" = 0.75,  "p_1to3" = 0.125, "p_1to4" = 0,
+       "p_2to1" = 0.016, "p_2to2" = 0.5,   "p_2to3" = 0.452, "p_2to4" = 0.032,
+       "p_3to1" = 0,     "p_3to2" = 0.28,  "p_3to3" = 0.6,   "p_3to4" = 0.12,
+       "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1),
+  # Cycle 5 (30 months) - This will be used for all subsequent cycles
+  list("p_1to1" = 0.125, "p_1to2" = 0.75,  "p_1to3" = 0.125, "p_1to4" = 0,
+       "p_2to1" = 0.016, "p_2to2" = 0.5,   "p_2to3" = 0.452, "p_2to4" = 0.032,
+       "p_3to1" = 0,     "p_3to2" = 0.28,  "p_3to3" = 0.6,   "p_3to4" = 0.12,
+       "p_4to1" = 0,     "p_4to2" = 0,     "p_4to3" = 0,     "p_4to4" = 1,
+       "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1)
 )
 
 ## Discontinuation Probabilities
@@ -571,20 +626,12 @@ c_NYHA2_si     <- c_NYHA2_base + (c_si * (1-c_discount))
 c_NYHA3_si     <- c_NYHA3_base + (c_si * (1-c_discount))
 c_NYHA4_si     <- c_NYHA4_base + (c_si * (1-c_discount))
 
-c_age_cof <- 11.5
-v_cost_coeffs <- c("age" = c_age_cof)
-
 # Utilities (Unchanged)
 u_NYHA1   <- 0.82
 u_NYHA2   <- 0.729
 u_NYHA3   <- 0.633
 u_NYHA4   <- 0.333
 u_Death   <- 0
-u_age_cof <- -0.0018
-ru_sv     <- -0.0015
-
-v_util_coeffs <- c("age" = u_age_cof)
-v_util_t_decs <- c("NYHA3 or 4" = ru_sv)
 
 # Cost Vectors
 v_states_costs_st  <- c("NYHA1" = c_NYHA1_st, "NYHA2" = c_NYHA2_st, "NYHA3" = c_NYHA3_st, "NYHA4" = c_NYHA4_st,"Death" = c_D)
@@ -614,12 +661,9 @@ res_st_male <- run_microSimV_hosp_disc(
   v_states_names      = v_states_names,
   v_states_costs_arm  = v_states_costs_st,
   v_states_costs_soc  = v_states_costs_soc,
-  v_cost_coeffs       = v_cost_coeffs,
   v_states_utilities  = v_states_utilities,
-  v_util_coeffs       = v_util_coeffs,
-  v_util_t_decs       = v_util_t_decs,
-  l_trans_probs_arm   = l_trans_probs_st,
-  l_trans_probs_soc   = l_trans_probs_soc,
+  l_trans_probs_arm   = l_trans_probs_st_tv,
+  l_trans_probs_soc   = l_trans_probs_soc_tv,
   p_disc              = p_disc_st,
   params_gompertz_sex = params_gompertz$male,
   v_hosp_probs        = v_hosp_probs_st,
@@ -640,12 +684,9 @@ res_si_male <- run_microSimV_hosp_disc(
   v_states_names      = v_states_names,
   v_states_costs_arm  = v_states_costs_si,
   v_states_costs_soc  = v_states_costs_soc,
-  v_cost_coeffs       = v_cost_coeffs,
   v_states_utilities  = v_states_utilities,
-  v_util_coeffs       = v_util_coeffs,
-  v_util_t_decs       = v_util_t_decs,
-  l_trans_probs_arm   = l_trans_probs_si,
-  l_trans_probs_soc   = l_trans_probs_soc,
+  l_trans_probs_arm   = l_trans_probs_si_tv,
+  l_trans_probs_soc   = l_trans_probs_soc_tv,
   p_disc              = p_disc_si,
   params_gompertz_sex = params_gompertz$male,
   v_hosp_probs        = v_hosp_probs_si,
@@ -668,12 +709,9 @@ res_st_female <- run_microSimV_hosp_disc(
   v_states_names      = v_states_names,
   v_states_costs_arm  = v_states_costs_st,
   v_states_costs_soc  = v_states_costs_soc,
-  v_cost_coeffs       = v_cost_coeffs,
   v_states_utilities  = v_states_utilities,
-  v_util_coeffs       = v_util_coeffs,
-  v_util_t_decs       = v_util_t_decs,
-  l_trans_probs_arm   = l_trans_probs_st,
-  l_trans_probs_soc   = l_trans_probs_soc,
+  l_trans_probs_arm   = l_trans_probs_st_tv,
+  l_trans_probs_soc   = l_trans_probs_soc_tv,
   p_disc              = p_disc_st,
   params_gompertz_sex = params_gompertz$female,
   v_hosp_probs        = v_hosp_probs_st,
@@ -694,12 +732,9 @@ res_si_female <- run_microSimV_hosp_disc(
   v_states_names      = v_states_names,
   v_states_costs_arm  = v_states_costs_si,
   v_states_costs_soc  = v_states_costs_soc,
-  v_cost_coeffs       = v_cost_coeffs,
   v_states_utilities  = v_states_utilities,
-  v_util_coeffs       = v_util_coeffs,
-  v_util_t_decs       = v_util_t_decs,
-  l_trans_probs_arm   = l_trans_probs_si,
-  l_trans_probs_soc   = l_trans_probs_soc,
+  l_trans_probs_arm   = l_trans_probs_si_tv,
+  l_trans_probs_soc   = l_trans_probs_soc_tv,
   p_disc              = p_disc_si,
   params_gompertz_sex = params_gompertz$female,
   v_hosp_probs        = v_hosp_probs_si,
