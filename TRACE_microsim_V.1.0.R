@@ -36,7 +36,7 @@ get_m_probs <- function(
   
   # 1. Calculate age- and sex-specific background mortality HAZARD (annual) from Gompertz
   v_age <- m_indi_features[, "age"]
-  h_H <- params_gompertz_sex$shape * exp(params_gompertz_sex$rate * v_age)
+  h_H <- params_gompertz_sex$rate * exp(params_gompertz_sex$shape * v_age)
   
   # 2. Calculate state-specific mortality PROBABILITIES for the cycle
   # Apply hazard ratios to the background hazard to get state-specific annual hazards

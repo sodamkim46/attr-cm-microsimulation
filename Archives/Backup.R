@@ -1,5 +1,3 @@
-# Vectorised Healthy-Sick-Dead microsimulation model with Discontinuation Logic
-
 # clear R's session memory (Global Environment)
 rm(list = ls())
 

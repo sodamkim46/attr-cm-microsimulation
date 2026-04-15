@@ -1,0 +1,50 @@
+
+
+# STEP 0: Install and load required packages
+# 패키지 설치는 한 번만 실행하면 됩니다. 이미 설치되어 있다면 library() 명령만 실행해도 됩니다.
+if (!require("survival")) install.packages("survival")
+if (!require("survminer")) install.packages("survminer")
+
+# 현재 R 세션에서 사용할 패키지를 불러옵니다.
+library(survival)
+library(survminer)
+
+# STEP 1: Find each individual's time to death
+# apply() scans each row (individual) to find the first cycle where state == "Death"
+time_to_death <- apply(res_st_male$m_States, MARGIN = 1, FUN = function(individual_row) {
+  death_positions <- which(individual_row == "Death")
+  if (length(death_positions) == 0) {
+    return(NA)  # Never died = censored
+  }
+  return(death_positions[1] - 1)  # Subtract 1 to convert index back to cycle number
+})
+
+# STEP 2: Create time and event variables for survival analysis
+total_cycles      <- ncol(res_st_male$m_States) - 1
+event_indicator   <- ifelse(!is.na(time_to_death), 1, 0)
+time_to_death_clean <- ifelse(!is.na(time_to_death), time_to_death, total_cycles)
+
+# STEP 3: Build a clean data frame
+survival_data <- data.frame(
+  individual = rownames(res_st_male$m_States),
+  time       = time_to_death_clean,
+  event      = event_indicator
+)
+head(survival_data)  # Sanity check
+
+# STEP 4: Fit the Kaplan-Meier curve
+km_fit <- survfit(Surv(time, event) ~ 1, data = survival_data)
+summary(km_fit)
+
+# STEP 5: Plot
+ggsurvplot(
+  fit              = km_fit,
+  data             = survival_data,
+  conf.int         = TRUE,
+  risk.table       = TRUE,
+  xlab             = "Cycle (Time)",
+  ylab             = "Survival Probability",
+  title            = "Kaplan-Meier Curve: Time to Death",
+  surv.median.line = "hv",
+  ggtheme          = theme_minimal()
+)
