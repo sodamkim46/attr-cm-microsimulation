@@ -14,7 +14,8 @@ get_m_probs <- function(
     cycle_length,
     v_states_names,
     m_indi_features,
-    params_gompertz_sex) {
+    params_gompertz_sex,
+    treatment_mortality_multiplier = 1) {
   
   num_i <- nrow(m_indi_features)
   m_probs <- matrix(0,
@@ -51,7 +52,7 @@ get_m_probs <- function(
   
   # 2. Calculate state-specific cumulative mortality HAZARDS for the cycle
   # Apply hazard ratios to the background cumulative hazard.
-  cum_h_1 <- cumulative_hazard_base * rr_HF
+  cum_h_1 <- cumulative_hazard_base * rr_HF * treatment_mortality_multiplier
   cum_h_2 <- cum_h_1 * rr_2v1
   cum_h_3 <- cum_h_1 * rr_3v1
   cum_h_4 <- cum_h_1 * rr_4v1
@@ -115,10 +116,10 @@ update_probsV_disc <- function(
     cycle_length = 0.5) {
   
   # 1. Calculate probabilities assuming everyone is on treatment
-  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex)
+  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, treatment_mortality_multiplier = 1.2)
   
   # 2. Calculate probabilities assuming everyone is on SoC
-  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex)
+  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, treatment_mortality_multiplier = 2.75)
   
   # 3. Combine based on discontinuation status
   # v_discontinued is a vector of length N. We multiply to broadcast across columns.
@@ -456,7 +457,7 @@ discount_rate_costs <- 0.03
 discount_rate_QALYs <- 0.03              
 
 ## Population characteristics
-mean_age            <- 77                
+mean_age            <- 77.3                
 sd_age              <- 5                 
 set.seed(seed)
 # Create separate populations for males and females to account for different mortality
@@ -570,11 +571,12 @@ l_trans_probs_soc_tv <- list(
 # P(Disc in 2.5y) = 1 - (1 - p_cycle)^5
 # p_cycle = 1 - (1 - P_2.5y)^(1/5)
 
-p_disc_2.5y_st <- 0.212
-p_disc_st <- 1 - (1 - p_disc_2.5y_st)^(1/5)
+#p_disc_2.5y_st <- 0.212
+p_disc_st <- 0.019333235
+#p_disc_st <- 1 - (1 - p_disc_2.5y_st)^(1/5)
 
 ## Cost and utility inputs
-c_discount     <- 0.28
+c_discount     <- 0.275
 c_st           <- 112555
 
 # Base Costs (SoC Costs) - Derived from original file logic
