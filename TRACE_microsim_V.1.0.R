@@ -34,22 +34,28 @@ get_m_probs <- function(
   rr_3v1 <- l_trans_probs$rr_3v1
   rr_4v1 <- l_trans_probs$rr_4v1
   
-  # 1. Calculate age- and sex-specific background mortality HAZARD (annual) from Gompertz
+  # 1. Calculate age- and sex-specific background cumulative mortality HAZARD for the cycle from Gompertz
   v_age <- m_indi_features[, "age"]
-  h_H <- params_gompertz_sex$rate * exp(params_gompertz_sex$shape * v_age)
+  # The Gompertz hazard function is h(a) = alpha * exp(beta * a)
+  # The cumulative hazard over an interval [a, a + L] is (alpha/beta) * (exp(beta * (a + L)) - exp(beta * a))
+  alpha <- params_gompertz_sex$rate
+  beta  <- params_gompertz_sex$shape
   
-  # 2. Calculate state-specific mortality PROBABILITIES for the cycle
-  # Apply hazard ratios to the background hazard to get state-specific annual hazards
-  h_1 <- h_H * rr_HF
-  h_2 <- h_1 * rr_2v1
-  h_3 <- h_1 * rr_3v1
-  h_4 <- h_1 * rr_4v1
+  # Handle the case where beta is very close to zero to avoid division by zero.
+  # If beta is zero, hazard is constant: h(a) = alpha. Cumulative hazard = alpha * L.
+ if (abs(beta) < 1e-9) {cumulative_hazard_base <- rep(alpha * cycle_length, length(v_age))} 
+    else {cumulative_hazard_base <- (alpha / beta) * (exp(beta * (v_age + cycle_length)) - exp(beta * v_age))}
   
-  # Convert annual hazards to probabilities for the current cycle length
-  p_1toD <- 1 - exp(-h_1 * cycle_length)
-  p_2toD <- 1 - exp(-h_2 * cycle_length)
-  p_3toD <- 1 - exp(-h_3 * cycle_length) # rp_sv logic removed
-  p_4toD <- 1 - exp(-h_4 * cycle_length) # rp_sv logic removed
+  cum_h_1 <- cumulative_hazard_base*rr_HF
+  cum_h_2 <- cum_h_1 * rr_2v1
+  cum_h_3 <- cum_h_1 * rr_3v1
+  cum_h_4 <- cum_h_1 * rr_4v1
+  
+  # Convert cumulative hazards to probabilities for the current cycle length
+  p_1toD <- 1 - exp(-cum_h_1)
+  p_2toD <- 1 - exp(-cum_h_2)
+  p_3toD <- 1 - exp(-cum_h_3)
+  p_4toD <- 1 - exp(-cum_h_4)
   
   # Ensure probabilities are capped at 1
   p_1toD[p_1toD > 1] <- 1; p_2toD[p_2toD > 1] <- 1
