@@ -14,7 +14,7 @@ get_m_probs <- function(
     cycle_length,
     v_states_names,
     m_indi_features,
-    params_gompertz_sex,
+    v_qx_lookup,
     treatment_mortality_multiplier = 1) {
   
   num_i <- nrow(m_indi_features)
@@ -35,33 +35,32 @@ get_m_probs <- function(
   rr_3v1 <- l_trans_probs$rr_3v1
   rr_4v1 <- l_trans_probs$rr_4v1
   
-  # 1. Calculate age- and sex-specific background cumulative mortality HAZARD for the cycle from Gompertz
-  v_age <- m_indi_features[, "age"]
-  # The Gompertz hazard function in this file is h(a) = shape * exp(rate * a)
-  # So, let's set alpha = rate, beta = shape
-  alpha <- params_gompertz_sex$rate
-  beta  <- params_gompertz_sex$shape
+ # 1. Round down age to an integer
+  v_age_rounded <- floor(m_indi_features[, "age"])
   
-  # The cumulative hazard for h(a) = beta * exp(alpha * a) over an interval [a, a + L] is:
-  # (beta / alpha) * (exp(alpha * (a + L)) - exp(alpha * a))
+  # Cap the age to not exceed the maximum age in the life table (safety measure)
+  v_age_rounded[v_age_rounded > 119] <- 119 
   
-  # Handle the case where alpha is very close to zero to avoid division by zero.
-  # If alpha is zero, hazard is constant: h(a) = beta. Cumulative hazard = beta * L.
-  if (abs(beta) < 1e-9) {cumulative_hazard_base <- rep(alpha * cycle_length, length(v_age))} 
-    else {cumulative_hazard_base <- (alpha / beta) * (exp(beta * (v_age + cycle_length)) - exp(beta * v_age))}
+  # 2. Extract the annual probability of death for the corresponding age from the raw life table data 
+  v_annual_prob <- v_qx_lookup[as.character(v_age_rounded)]
   
-  # 2. Calculate state-specific cumulative mortality HAZARDS for the cycle
-  # Apply hazard ratios to the background cumulative hazard.
-  cum_h_1 <- cumulative_hazard_base * rr_HF
+  # 3. Convert the 1-year probability to an annual hazard rate
+  v_annual_hazard <- -log(1 - v_annual_prob)
+  
+  # 4. Calculate the baseline cumulative hazard adjusted for the given cycle length (e.g., 0.5 years)
+  cumulative_hazard_base <- v_annual_hazard * cycle_length
+  
+  # 5. Apply hazard ratios and the treatment-specific mortality multiplier
+  cum_h_1 <- cumulative_hazard_base * rr_HF * treatment_mortality_multiplier # NEED TO WORK ON THIS as in excel model, it is applied to prob
   cum_h_2 <- cum_h_1 * rr_2v1
   cum_h_3 <- cum_h_1 * rr_3v1
   cum_h_4 <- cum_h_1 * rr_4v1
   
-  # Convert cumulative hazards to probabilities
-  p_1toD <- (1 - exp(-cum_h_1))* treatment_mortality_multiplier
-  p_2toD <- (1 - exp(-cum_h_2))* treatment_mortality_multiplier
-  p_3toD <- (1 - exp(-cum_h_3))* treatment_mortality_multiplier
-  p_4toD <- (1 - exp(-cum_h_4))* treatment_mortality_multiplier
+  # 6. Finally, convert the cumulative hazards back to transition probabilities for the current cycle
+  p_1toD <- 1 - exp(-cum_h_1)
+  p_2toD <- 1 - exp(-cum_h_2)
+  p_3toD <- 1 - exp(-cum_h_3)
+  p_4toD <- 1 - exp(-cum_h_4)
 
   # Ensure probabilities are capped at 1
   p_1toD[p_1toD > 1] <- 1; p_2toD[p_2toD > 1] <- 1
@@ -112,14 +111,14 @@ update_probsV_disc <- function(
     l_trans_probs_soc, # Probabilities for those discontinued (SoC)
     v_discontinued,    # Binary vector: 1 if discontinued, 0 otherwise
     m_indi_features,   # For age/sex to calculate mortality
-    params_gompertz_sex, # Sex-specific gompertz parameters
+    v_qx_lookup,       # Sex-specific mortality lookup vector
     cycle_length = 0.5) {
   
   # 1. Calculate probabilities assuming everyone is on treatment
-  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, treatment_mortality_multiplier = 1)
+  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, v_qx_lookup, treatment_mortality_multiplier = 1)
   
   # 2. Calculate probabilities assuming everyone is on SoC
-  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, treatment_mortality_multiplier = 1)
+  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, v_qx_lookup, treatment_mortality_multiplier = 1)
   
   # 3. Combine based on discontinuation status
   # v_discontinued is a vector of length N. We multiply to broadcast across columns.
@@ -286,7 +285,7 @@ run_microSimV_hosp_disc <- function(
     l_trans_probs_arm,  # Probs for treatment arm
     l_trans_probs_soc,  # Probs for SoC
     p_disc,             # Probability of discontinuation per cycle
-    params_gompertz_sex,# Sex-specific Gompertz parameters for background mortality
+    v_qx_lookup,        # Sex-specific mortality lookup vector
     v_hosp_probs,     
     v_hosp_costs,     
     v_hosp_disutils,  
@@ -371,7 +370,7 @@ run_microSimV_hosp_disc <- function(
       l_trans_probs_soc = l_trans_probs_soc_t, # NEW: Use time-dependent SoC probabilities
       v_discontinued    = v_discontinued,
       m_indi_features   = m_indi_features,
-      params_gompertz_sex = params_gompertz_sex,
+      v_qx_lookup       = v_qx_lookup,
       cycle_length      = cycle_length
     )
     
@@ -514,7 +513,7 @@ discount_rate_QALYs <- 0.03
 
 ## Population characteristics
 mean_age            <- 77.3                
-sd_age              <- 0 #5                
+sd_age              <- 0 #5                 
 set.seed(seed)
 # Create separate populations for males and females to account for different mortality
 m_indi_features_male <- cbind(
@@ -531,17 +530,23 @@ v_starting_states <- sample(x = v_states_names, size = num_i, replace = TRUE, pr
 
 ## Transition and Mortality Parameters
 
-# --- Background Mortality Parameters (from workingTRACE_mortality_fitting.R) --- #
-params_gompertz <- list(
-  male = list(
-    shape = 0.07943271, #0.1014027 
-    rate  = 0.0001155519 #1.934313e-05    
-  ),
-  female = list(
-    shape = 0.09307892, #0.1089245 
-    rate  = 2.864362e-05 #7.472652e-06     
-  )
-)
+# --- Background Mortality Parameters (from Actuarial Life Table) --- #
+# The Gompertz parameters are no longer used for mortality calculation.
+# Instead, we will load the actuarial life table and create lookup vectors.
+
+tryCatch({
+  df_raw_lifetable <- read.csv("2022 Actuarial Life Table.csv")
+}, error = function(e) {
+  stop("Could not find '2022 Actuarial Life Table.csv'. Please ensure the file is in the correct directory.")
+})
+
+# Create named vectors for fast VLOOKUP-style access
+v_qx_male <- df_raw_lifetable$Male.Death.probability
+names(v_qx_male) <- as.character(df_raw_lifetable$Exact.age)
+
+v_qx_female <- df_raw_lifetable$Female.Death.probability
+names(v_qx_female) <- as.character(df_raw_lifetable$Exact.age)
+
 
 # Hazard Ratios for mortality (relative to background mortality)
 rr_HF   <- 1 #3.17                   
@@ -687,7 +692,7 @@ res_st_male <- run_microSimV_hosp_disc(
   l_trans_probs_arm   = l_trans_probs_st_tv,
   l_trans_probs_soc   = l_trans_probs_soc_tv,
   p_disc              = p_disc_st,
-  params_gompertz_sex = params_gompertz$male,
+  v_qx_lookup         = v_qx_male,
   v_hosp_probs        = v_hosp_probs_st,
   v_hosp_costs        = v_hosp_costs,
   v_hosp_disutils     = v_hosp_disutils,
@@ -711,7 +716,7 @@ res_soc_male <- run_microSimV_hosp_disc(
   l_trans_probs_arm   = l_trans_probs_soc_tv, # Use SoC probs as the "arm" probs
   l_trans_probs_soc   = l_trans_probs_soc_tv, # SoC probs for discontinuation (won't happen)
   p_disc              = 0,                    # No discontinuation for SoC arm
-  params_gompertz_sex = params_gompertz$male,
+  v_qx_lookup         = v_qx_male,
   v_hosp_probs        = v_hosp_probs_soc,     # Use specified hosp probs for SoC arm
   v_hosp_costs        = v_hosp_costs,
   v_hosp_disutils     = v_hosp_disutils,
@@ -736,7 +741,7 @@ res_st_female <- run_microSimV_hosp_disc(
   l_trans_probs_arm   = l_trans_probs_st_tv,
   l_trans_probs_soc   = l_trans_probs_soc_tv,
   p_disc              = p_disc_st,
-  params_gompertz_sex = params_gompertz$female,
+  v_qx_lookup         = v_qx_female,
   v_hosp_probs        = v_hosp_probs_st,
   v_hosp_costs        = v_hosp_costs,
   v_hosp_disutils     = v_hosp_disutils,
@@ -759,7 +764,7 @@ res_soc_female <- run_microSimV_hosp_disc(
   l_trans_probs_arm   = l_trans_probs_soc_tv,
   l_trans_probs_soc   = l_trans_probs_soc_tv,
   p_disc              = 0,
-  params_gompertz_sex = params_gompertz$female,
+  v_qx_lookup         = v_qx_female,
   v_hosp_probs        = v_hosp_probs_soc,
   v_hosp_costs        = v_hosp_costs,
   v_hosp_disutils     = v_hosp_disutils,

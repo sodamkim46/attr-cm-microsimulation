@@ -1,10 +1,10 @@
 # clear R's session memory (Global Environment)
 rm(list = ls())
 
-install.packages("flexsurv")
-install.packages("survminer")
+#install.packages("flexsurv")
+#install.packages("survminer")
 
-library (survival)
+library(survival)
 library(flexsurv)
 library(ggplot2)
 library(dplyr)
@@ -55,23 +55,23 @@ df_female <- generate_cohort(df_raw_lifetable$Female.Death.probability, ages_fro
 
 df_life_table <- rbind(df_male, df_female)
 
-# Filter for adult population (e.g., age > 50) relevant for ATTR-CM
+# Filter for adult population (e.g., age > 50) relevant for ATTR-CM -> THIS MAY BE WRONG! LET'S USE THE WHOLE POPULATION
 # to ensure the fit is optimized for the older population.
-df_adults <- df_life_table %>% filter(time > 50)
+# df_adults <- df_life_table %>% filter(time > 50)
 
 # 2. Plot Actual Mortality (Kaplan-Meier) by Sex ----------------------------
 
 # Create survival object
-surv_obj <- Surv(time = df_adults$time, event = df_adults$status)
+surv_obj <- Surv(time = df_life_table$time, event = df_life_table$status)
 
 # Fit KM
-km_fit <- survfit(surv_obj ~ Sex, data = df_adults)
+km_fit <- survfit(surv_obj ~ Sex, data = df_life_table)
 
 # Plot
 ggsurvplot(
   km_fit, 
-  data = df_adults,
-  title = "Actual Survival Curve by Sex (2022 Actuarial Table - Adults > 50)",
+  data = df_life_table,
+  title = "Actual Survival Curve by Sex (2022 Actuarial Table)",
   xlab = "Age (Years)",
   ylab = "Survival Probability",
   risk.table = TRUE,
@@ -85,14 +85,14 @@ ggsurvplot(
 # Fit Male
 fit_male <- flexsurvreg(
   formula = Surv(time, status) ~ 1, 
-  data = df_adults %>% filter(Sex == "Male"), 
+  data = df_life_table %>% filter(Sex == "Male"), 
   dist = "gompertz"
 )
 
 # Fit Female
 fit_female <- flexsurvreg(
   formula = Surv(time, status) ~ 1, 
-  data = df_adults %>% filter(Sex == "Female"), 
+  data = df_life_table %>% filter(Sex == "Female"), 
   dist = "gompertz"
 )
 

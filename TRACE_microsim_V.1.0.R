@@ -610,7 +610,7 @@ p_disc_st <- 1 - (1 - p_disc_2.5y_st)^(1/5)
 p_disc_si <- 1 - (1 - p_disc_2.5y_si)^(1/5)
 
 ## Cost and utility inputs
-c_discount     <- 0.28
+c_discount     <- 0.275
 c_st           <- 112555
 c_si           <- 238850
 
