@@ -8,6 +8,7 @@ rm(list = ls())
 # Helper function to calculate transition matrix for a given set of parameters
 # This extracts the logic from the original update_probsV so it can be reused for different arms
 # [MODIFIED] to handle age/sex-dependent background mortality
+# Helper function to calculate transition matrix for a given set of parameters
 get_m_probs <- function(
     l_trans_probs,
     v_occupied_state,
@@ -37,45 +38,38 @@ get_m_probs <- function(
   
   # 1. Calculate age- and sex-specific background cumulative mortality HAZARD for the cycle from Gompertz
   v_age <- m_indi_features[, "age"]
-  # The Gompertz hazard function in this file is h(a) = shape * exp(rate * a)
-  # So, let's set alpha = rate, beta = shape
   alpha <- params_gompertz_sex$rate
   beta  <- params_gompertz_sex$shape
   
-  # The cumulative hazard for h(a) = beta * exp(alpha * a) over an interval [a, a + L] is:
-  # (beta / alpha) * (exp(alpha * (a + L)) - exp(alpha * a))
+  if (abs(beta) < 1e-9) {
+    cumulative_hazard_base <- rep(alpha * cycle_length, length(v_age))
+  } else {
+    cumulative_hazard_base <- (alpha / beta) * (exp(beta * (v_age + cycle_length)) - exp(beta * v_age))
+  }
   
-  # Handle the case where alpha is very close to zero to avoid division by zero.
-  # If alpha is zero, hazard is constant: h(a) = beta. Cumulative hazard = beta * L.
-  if (abs(beta) < 1e-9) {cumulative_hazard_base <- rep(alpha * cycle_length, length(v_age))} 
-    else {cumulative_hazard_base <- (alpha / beta) * (exp(beta * (v_age + cycle_length)) - exp(beta * v_age))}
+  # =========================================================================
+  # 🚨 [Validation용 로직: Gompertz 유지 + 엑셀식 확률 직접 곱셈] 🚨
+  # =========================================================================
+  # 2. 어떤 RR도 섞이지 않은 일반인의 순수 '기본 사망 확률(Probability)'을 구합니다.
+  p_base <- 1 - exp(-cumulative_hazard_base)
   
-  # 2. Calculate state-specific cumulative mortality HAZARDS for the cycle
-  
-  
-  
-  # Apply hazard ratios to the background cumulative hazard.
-  cum_h_1 <- cumulative_hazard_base * rr_HF
-  cum_h_2 <- cum_h_1 * rr_2v1
-  cum_h_3 <- cum_h_1 * rr_3v1
-  cum_h_4 <- cum_h_1 * rr_4v1
-  
-  # Convert cumulative hazards to probabilities
-  p_1toD <- (1 - exp(-cum_h_1))* treatment_mortality_multiplier
-  p_2toD <- (1 - exp(-cum_h_2))* treatment_mortality_multiplier
-  p_3toD <- (1 - exp(-cum_h_3))* treatment_mortality_multiplier
-  p_4toD <- (1 - exp(-cum_h_4))* treatment_mortality_multiplier
+  # 3. 엑셀 로직 그대로: "확률(Probability)" 바깥에다가 RR을 직접 곱합니다!
+  # (요청하신 대로 treatment_mortality_multiplier는 기본값 1 그대로 들어갑니다)
+  p_1toD <- p_base * rr_HF * treatment_mortality_multiplier
+  p_2toD <- p_base * rr_HF * rr_2v1 * treatment_mortality_multiplier
+  p_3toD <- p_base * rr_HF * rr_3v1 * treatment_mortality_multiplier
+  p_4toD <- p_base * rr_HF * rr_4v1 * treatment_mortality_multiplier
 
-  # Ensure probabilities are capped at 1
+  # 4. 확률이 100% (1.0)를 넘는 것을 방지 (Capping)
   p_1toD[p_1toD > 1] <- 1; p_2toD[p_2toD > 1] <- 1
   p_3toD[p_3toD > 1] <- 1; p_4toD[p_4toD > 1] <- 1
+  # =========================================================================
   
-  # 3. Populate the transition matrix based on current state
+  # 5. Populate the transition matrix based on current state
   idx_nyha1 <- which(v_occupied_state == "NYHA1"); idx_nyha2 <- which(v_occupied_state == "NYHA2")
   idx_nyha3 <- which(v_occupied_state == "NYHA3"); idx_nyha4 <- which(v_occupied_state == "NYHA4")
   idx_death <- which(v_occupied_state == "Death")
   
-  # Probabilities to non-death states are scaled by (1 - p_death)
   if (length(idx_nyha1) > 0) {
     scaler <- 1 - p_1toD[idx_nyha1]
     m_probs[idx_nyha1, "NYHA1"] <- p_1to1 * scaler; m_probs[idx_nyha1, "NYHA2"] <- p_1to2 * scaler
