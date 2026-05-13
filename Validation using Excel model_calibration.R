@@ -55,16 +55,17 @@ get_m_probs <- function(
   
   
   # Apply hazard ratios to the background cumulative hazard.
-  cum_h_1 <- cumulative_hazard_base * rr_HF
-  cum_h_2 <- cum_h_1 * rr_2v1
-  cum_h_3 <- cum_h_1 * rr_3v1
-  cum_h_4 <- cum_h_1 * rr_4v1
+  cum_h_base_disease <- cumulative_hazard_base * rr_HF * treatment_mortality_multiplier
+  cum_h_1 <- cum_h_base_disease
+  cum_h_2 <- cum_h_base_disease * rr_2v1
+  cum_h_3 <- cum_h_base_disease * rr_3v1
+  cum_h_4 <- cum_h_base_disease * rr_4v1
   
   # Convert cumulative hazards to probabilities
-  p_1toD <- (1 - exp(-cum_h_1))* treatment_mortality_multiplier
-  p_2toD <- (1 - exp(-cum_h_2))* treatment_mortality_multiplier
-  p_3toD <- (1 - exp(-cum_h_3))* treatment_mortality_multiplier
-  p_4toD <- (1 - exp(-cum_h_4))* treatment_mortality_multiplier
+  p_1toD <- (1 - exp(-cum_h_1))
+  p_2toD <- (1 - exp(-cum_h_2))
+  p_3toD <- (1 - exp(-cum_h_3))
+  p_4toD <- (1 - exp(-cum_h_4))
 
   # Ensure probabilities are capped at 1
   p_1toD[p_1toD > 1] <- 1; p_2toD[p_2toD > 1] <- 1
@@ -116,13 +117,15 @@ update_probsV_disc <- function(
     v_discontinued,    # Binary vector: 1 if discontinued, 0 otherwise
     m_indi_features,   # For age/sex to calculate mortality
     params_gompertz_sex, # Sex-specific gompertz parameters
+    mort_mult_arm = 1, # NEW: Mortality multiplier for the arm
+    mort_mult_soc = 1, # NEW: Mortality multiplier for the SoC/discontinued group
     cycle_length = 0.5) {
   
   # 1. Calculate probabilities assuming everyone is on treatment
-  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, treatment_mortality_multiplier = 1)
+  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, treatment_mortality_multiplier = mort_mult_arm)
   
   # 2. Calculate probabilities assuming everyone is on SoC
-  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, treatment_mortality_multiplier = 1)
+  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, treatment_mortality_multiplier = mort_mult_soc)
   
   # 3. Combine based on discontinuation status
   # v_discontinued is a vector of length N. We multiply to broadcast across columns.
@@ -290,6 +293,8 @@ run_microSimV_hosp_disc <- function(
     l_trans_probs_soc,  # Probs for SoC
     p_disc,             # Probability of discontinuation per cycle
     params_gompertz_sex,# Sex-specific Gompertz parameters for background mortality
+    mort_mult_arm = 1,  # NEW: Mortality multiplier for the arm
+    mort_mult_soc = 1,  # NEW: Mortality multiplier for the SoC/discontinued group
     v_hosp_probs,     
     v_hosp_costs,     
     v_hosp_disutils,  
@@ -374,6 +379,8 @@ run_microSimV_hosp_disc <- function(
       l_trans_probs_soc = l_trans_probs_soc_t, # NEW: Use time-dependent SoC probabilities
       v_discontinued    = v_discontinued,
       m_indi_features   = m_indi_features,
+      mort_mult_arm     = mort_mult_arm,       # NEW: Pass multiplier
+      mort_mult_soc     = mort_mult_soc,       # NEW: Pass multiplier
       params_gompertz_sex = params_gompertz_sex,
       cycle_length      = cycle_length
     )
@@ -673,6 +680,109 @@ v_hosp_probs_soc <- v_hosp_probs_st
 v_hosp_costs    <- c("NYHA1" = 30584.15689, "NYHA2" = 17400.10754, "NYHA3" = 17694.56047, "NYHA4" = 21041.54226, "Death" = 0)
 v_hosp_disutils <- c("NYHA1" = 0.023, "NYHA2" = 0.01, "NYHA3" = 0.027, "NYHA4" = 0.07, "Death" = 0)
 
+### Calibrating Mortality Multipliers ###
+
+cat("\n--- Calibrating Mortality Multipliers to Match 30-Month Survival ---\n")
+
+# Define the objective function for calibration.
+# This function runs a simulation with a given mortality multiplier and returns
+# the difference between the simulated 30-month survival and the target survival.
+# Note: We run this on the MALE cohort parameters as a reference. The multiplier is sex-independent.
+get_survival_diff <- function(
+    multiplier,
+    target_survival,
+    arm_params, # A list containing params for the specific arm to run
+    common_params # A list of params common to all simulations
+) {
+  
+  # Run the simulation with the given multiplier.
+  # For the 'stabilizer' arm, the multiplier applies to both on-treatment and post-discontinuation mortality.
+  # For the 'soc' arm, there is no discontinuation, so the multiplier only applies to the main arm.
+  sim_results <- run_microSimV_hosp_disc(
+    v_starting_states   = common_params$v_starting_states,
+    num_i               = common_params$num_i,
+    num_cycles          = 5, # Only need to run for 5 cycles (30 months)
+    m_indi_features     = common_params$m_indi_features_male,
+    v_states_names      = common_params$v_states_names,
+    v_states_costs_arm  = arm_params$v_states_costs_arm,
+    v_states_costs_soc  = arm_params$v_states_costs_soc,
+    v_states_utilities  = common_params$v_states_utilities,
+    l_trans_probs_arm   = arm_params$l_trans_probs_arm,
+    l_trans_probs_soc   = arm_params$l_trans_probs_soc,
+    p_disc              = arm_params$p_disc,
+    params_gompertz_sex = common_params$params_gompertz$male,
+    mort_mult_arm       = multiplier,
+    mort_mult_soc       = multiplier, # Apply same multiplier to discontinued patients for simplicity
+    v_hosp_probs        = arm_params$v_hosp_probs,
+    v_hosp_costs        = common_params$v_hosp_costs,
+    v_hosp_disutils     = common_params$v_hosp_disutils,
+    discount_rate_costs = common_params$discount_rate_costs,
+    discount_rate_QALYs = common_params$discount_rate_QALYs,
+    cycle_length        = common_params$cycle_length,
+    starting_seed       = common_params$seed
+  )
+  
+  # Calculate survival at 30 months (end of cycle 5)
+  # m_States has num_cycles + 1 columns, so col 6 is end of cycle 5
+  survival_at_30m <- sum(sim_results$m_States[, 6] != "Death") / common_params$num_i
+  
+  # Return the difference to be minimized by uniroot
+  return(survival_at_30m - target_survival)
+}
+
+# --- Define parameter sets for calibration ---
+
+# Parameters common to all simulations
+common_params <- list(
+  v_starting_states   = v_starting_states,
+  num_i               = num_i,
+  m_indi_features_male= m_indi_features_male,
+  v_states_names      = v_states_names,
+  v_states_utilities  = v_states_utilities,
+  params_gompertz     = params_gompertz,
+  v_hosp_costs        = v_hosp_costs,
+  v_hosp_disutils     = v_hosp_disutils,
+  discount_rate_costs = discount_rate_costs,
+  discount_rate_QALYs = discount_rate_QALYs,
+  cycle_length        = cycle_length,
+  seed                = seed
+)
+
+# Parameters for the SoC (Placebo) arm
+soc_params <- list(
+  v_states_costs_arm  = v_states_costs_soc,
+  v_states_costs_soc  = v_states_costs_soc,
+  l_trans_probs_arm   = l_trans_probs_soc_tv,
+  l_trans_probs_soc   = l_trans_probs_soc_tv,
+  p_disc              = 0, # No discontinuation in pure SoC arm
+  v_hosp_probs        = v_hosp_probs_soc
+)
+
+# Parameters for the Stabilizer (Tafamidis) arm
+st_params <- list(
+  v_states_costs_arm  = v_states_costs_st,
+  v_states_costs_soc  = v_states_costs_soc,
+  l_trans_probs_arm   = l_trans_probs_st_tv,
+  l_trans_probs_soc   = l_trans_probs_soc_tv,
+  p_disc              = p_disc_st,
+  v_hosp_probs        = v_hosp_probs_st
+)
+
+
+# --- Run Calibration for SoC (Placebo) Arm ---
+cat("Calibrating for SoC (Placebo) arm... Target survival: 0.58\n")
+soc_calibration_result <- uniroot(get_survival_diff, interval = c(0.1, 5), target_survival = 0.58, arm_params = soc_params, common_params = common_params, tol = 1e-4)
+calibrated_mult_soc <- soc_calibration_result$root
+cat("-> Calibrated SoC Mortality Multiplier:", calibrated_mult_soc, "\n")
+
+
+# --- Run Calibration for Stabilizer (Tafamidis) Arm ---
+cat("Calibrating for Stabilizer (Tafamidis) arm... Target survival: 0.70\n")
+st_calibration_result <- uniroot(get_survival_diff, interval = c(0.1, 2), target_survival = 0.70, arm_params = st_params, common_params = common_params, tol = 1e-4)
+calibrated_mult_st <- st_calibration_result$root
+cat("-> Calibrated Stabilizer Mortality Multiplier:", calibrated_mult_st, "\n")
+
+
 ### Running the simulation for Validation (Stabilizer vs SoC) ###
 
 cat("\n--- Running Validation Simulation for MALE Cohort (Stabilizer vs. SoC) ---\n")
@@ -690,6 +800,8 @@ res_st_male <- run_microSimV_hosp_disc(
   l_trans_probs_arm   = l_trans_probs_st_tv,
   l_trans_probs_soc   = l_trans_probs_soc_tv,
   p_disc              = p_disc_st,
+  mort_mult_arm       = calibrated_mult_st, # Use calibrated multiplier
+  mort_mult_soc       = calibrated_mult_st, # Use calibrated multiplier
   params_gompertz_sex = params_gompertz$male,
   v_hosp_probs        = v_hosp_probs_st,
   v_hosp_costs        = v_hosp_costs,
@@ -714,6 +826,8 @@ res_soc_male <- run_microSimV_hosp_disc(
   l_trans_probs_arm   = l_trans_probs_soc_tv, # Use SoC probs as the "arm" probs
   l_trans_probs_soc   = l_trans_probs_soc_tv, # SoC probs for discontinuation (won't happen)
   p_disc              = 0,                    # No discontinuation for SoC arm
+  mort_mult_arm       = calibrated_mult_soc,  # Use calibrated multiplier
+  mort_mult_soc       = calibrated_mult_soc,  # Use calibrated multiplier
   params_gompertz_sex = params_gompertz$male,
   v_hosp_probs        = v_hosp_probs_soc,     # Use specified hosp probs for SoC arm
   v_hosp_costs        = v_hosp_costs,
@@ -739,6 +853,8 @@ res_st_female <- run_microSimV_hosp_disc(
   l_trans_probs_arm   = l_trans_probs_st_tv,
   l_trans_probs_soc   = l_trans_probs_soc_tv,
   p_disc              = p_disc_st,
+  mort_mult_arm       = calibrated_mult_st, # Use calibrated multiplier
+  mort_mult_soc       = calibrated_mult_st, # Use calibrated multiplier
   params_gompertz_sex = params_gompertz$female,
   v_hosp_probs        = v_hosp_probs_st,
   v_hosp_costs        = v_hosp_costs,
@@ -762,6 +878,8 @@ res_soc_female <- run_microSimV_hosp_disc(
   l_trans_probs_arm   = l_trans_probs_soc_tv,
   l_trans_probs_soc   = l_trans_probs_soc_tv,
   p_disc              = 0,
+  mort_mult_arm       = calibrated_mult_soc,  # Use calibrated multiplier
+  mort_mult_soc       = calibrated_mult_soc,  # Use calibrated multiplier
   params_gompertz_sex = params_gompertz$female,
   v_hosp_probs        = v_hosp_probs_soc,
   v_hosp_costs        = v_hosp_costs,

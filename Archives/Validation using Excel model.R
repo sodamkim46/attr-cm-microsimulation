@@ -1,4 +1,4 @@
-# Vectorised microsimulation model with equivalent transition probability + waning treatment effect for silencers
+#Validation using Excel model
 
 # clear R's session memory (Global Environment)
 rm(list = ls())
@@ -14,7 +14,8 @@ get_m_probs <- function(
     cycle_length,
     v_states_names,
     m_indi_features,
-    params_gompertz_sex) {
+    params_gompertz_sex,
+    treatment_mortality_multiplier = 1) {
   
   num_i <- nrow(m_indi_features)
   m_probs <- matrix(0,
@@ -34,23 +35,38 @@ get_m_probs <- function(
   rr_3v1 <- l_trans_probs$rr_3v1
   rr_4v1 <- l_trans_probs$rr_4v1
   
-  # 1. Calculate age- and sex-specific background mortality HAZARD (annual) from Gompertz
+  # 1. Calculate age- and sex-specific background cumulative mortality HAZARD for the cycle from Gompertz
   v_age <- m_indi_features[, "age"]
-  h_H <- params_gompertz_sex$shape * exp(params_gompertz_sex$rate * v_age)
+  # The Gompertz hazard function in this file is h(a) = shape * exp(rate * a)
+  # So, let's set alpha = rate, beta = shape
+  alpha <- params_gompertz_sex$rate
+  beta  <- params_gompertz_sex$shape
   
-  # 2. Calculate state-specific mortality PROBABILITIES for the cycle
-  # Apply hazard ratios to the background hazard to get state-specific annual hazards
-  h_1 <- h_H * rr_HF
-  h_2 <- h_1 * rr_2v1
-  h_3 <- h_1 * rr_3v1
-  h_4 <- h_1 * rr_4v1
+  # The cumulative hazard for h(a) = beta * exp(alpha * a) over an interval [a, a + L] is:
+  # (beta / alpha) * (exp(alpha * (a + L)) - exp(alpha * a))
   
-  # Convert annual hazards to probabilities for the current cycle length
-  p_1toD <- 1 - exp(-h_1 * cycle_length)
-  p_2toD <- 1 - exp(-h_2 * cycle_length)
-  p_3toD <- 1 - exp(-h_3 * cycle_length) # rp_sv logic removed
-  p_4toD <- 1 - exp(-h_4 * cycle_length) # rp_sv logic removed
+  # Handle the case where alpha is very close to zero to avoid division by zero.
+  # If alpha is zero, hazard is constant: h(a) = beta. Cumulative hazard = beta * L.
+  if (abs(beta) < 1e-9) {cumulative_hazard_base <- rep(alpha * cycle_length, length(v_age))} 
+    else {cumulative_hazard_base <- (alpha / beta) * (exp(beta * (v_age + cycle_length)) - exp(beta * v_age))}
   
+  # 2. Calculate state-specific cumulative mortality HAZARDS for the cycle
+  
+  
+  
+  # Apply hazard ratios to the background cumulative hazard.
+  cum_h_base_disease <- cumulative_hazard_base * rr_HF * treatment_mortality_multiplier
+  cum_h_1 <- cum_h_base_disease
+  cum_h_2 <- cum_h_base_disease * rr_2v1
+  cum_h_3 <- cum_h_base_disease * rr_3v1
+  cum_h_4 <- cum_h_base_disease * rr_4v1
+  
+  # Convert cumulative hazards to probabilities
+  p_1toD <- (1 - exp(-cum_h_1))
+  p_2toD <- (1 - exp(-cum_h_2))
+  p_3toD <- (1 - exp(-cum_h_3))
+  p_4toD <- (1 - exp(-cum_h_4))
+
   # Ensure probabilities are capped at 1
   p_1toD[p_1toD > 1] <- 1; p_2toD[p_2toD > 1] <- 1
   p_3toD[p_3toD > 1] <- 1; p_4toD[p_4toD > 1] <- 1
@@ -101,13 +117,15 @@ update_probsV_disc <- function(
     v_discontinued,    # Binary vector: 1 if discontinued, 0 otherwise
     m_indi_features,   # For age/sex to calculate mortality
     params_gompertz_sex, # Sex-specific gompertz parameters
+    mort_mult_arm = 1, # NEW: Mortality multiplier for the arm
+    mort_mult_soc = 1, # NEW: Mortality multiplier for the SoC/discontinued group
     cycle_length = 0.5) {
   
   # 1. Calculate probabilities assuming everyone is on treatment
-  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex)
+  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, treatment_mortality_multiplier = mort_mult_arm)
   
   # 2. Calculate probabilities assuming everyone is on SoC
-  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex)
+  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, treatment_mortality_multiplier = mort_mult_soc)
   
   # 3. Combine based on discontinuation status
   # v_discontinued is a vector of length N. We multiply to broadcast across columns.
@@ -127,42 +145,42 @@ update_probsV_disc <- function(
 ### to in the next model cycle
 
 sampleV <- function(m_trans_probs, 
-  v_states_names) {
+                    v_states_names) {
   
   # create an upper triangular matrix of ones
   m_upper_tri <- upper.tri(
     x = diag(ncol(m_trans_probs)), 
     diag = TRUE
   )
-
+  
   # create matrix with row-wise cumulative transition probabilities
   m_cum_probs <- m_trans_probs %*% m_upper_tri
   colnames(m_cum_probs) <- v_states_names
-
+  
   # ensure that the maximum cumulative probabilities are equal to 1
   if (any(m_cum_probs[, ncol(m_cum_probs)] > 1.0000001)) { # Slight tolerance
     stop("Error in multinomial sampling: probabilities do not sum to 1")
   }
-
+  
   # sample random values from Uniform standard distribution for each individual
   v_rand_values <- runif(n = nrow(m_trans_probs))
-
+  
   # repeat each sampled value to have as many copies as the number of states
   m_rand_values <- matrix(
     data = rep(
       x = v_rand_values, 
       each = length(v_states_names)), 
-      nrow = nrow(m_trans_probs), 
-      ncol = length(v_states_names), 
-      byrow = TRUE
-    )
+    nrow = nrow(m_trans_probs), 
+    ncol = length(v_states_names), 
+    byrow = TRUE
+  )
   
   # identify transitions, compare random samples to cumulative probabilities
   m_transitions <- m_rand_values > m_cum_probs # transitions from first state
-
+  
   # sum transitions to identify health state in next cycle
   v_transitions <- rowSums(m_transitions)
-
+  
   # sum transitions to identify health state in next cycle
   v_health_states <- v_states_names[1 + v_transitions]
   return(v_health_states)
@@ -205,9 +223,9 @@ calc_costsV_disc <- function (
 ### cycle based on the health state occupied by each individuals at cycle 't',
 ### time spent in the states and the cycle_length (measured in years)
 calc_effsV <- function (
-  v_occupied_state,
-  v_states_utilities,
-  cycle_length = 1) {
+    v_occupied_state,
+    v_states_utilities,
+    cycle_length = 1) {
   
   # estimate utilities based on occupied state 
   v_state_utility <- rep(NA, length(v_occupied_state))
@@ -274,8 +292,9 @@ run_microSimV_hosp_disc <- function(
     l_trans_probs_arm,  # Probs for treatment arm
     l_trans_probs_soc,  # Probs for SoC
     p_disc,             # Probability of discontinuation per cycle
-    arm_name,           # NEW: To identify arm ("stabilizer" or "silencer") for waning effect
     params_gompertz_sex,# Sex-specific Gompertz parameters for background mortality
+    mort_mult_arm = 1,  # NEW: Mortality multiplier for the arm
+    mort_mult_soc = 1,  # NEW: Mortality multiplier for the SoC/discontinued group
     v_hosp_probs,     
     v_hosp_costs,     
     v_hosp_disutils,  
@@ -292,10 +311,25 @@ run_microSimV_hosp_disc <- function(
                     paste("cycle", 0:num_cycles, sep ="_"))
   )
   
+  # NEW: Create matrices to track mortality details
+  # Matrix to store the number of individuals in each NYHA class at the start of the cycle (excluding Death)
+  m_Num_at_risk_by_class <- matrix(0, nrow = 4, ncol = num_cycles, 
+                                   dimnames = list(v_states_names[1:4], paste("cycle", 1:num_cycles, sep ="_")))
+  # Matrix to store the count of actual deaths from each NYHA class per cycle
+  m_Actual_deaths_count_by_class <- matrix(0, nrow = 4, ncol = num_cycles, 
+                                           dimnames = list(v_states_names[1:4], paste("cycle", 1:num_cycles, sep ="_")))
+  # Matrix to store the actual proportion of deaths from each NYHA class per cycle
+  m_Actual_prop_deaths_by_class <- matrix(NA, nrow = 4, ncol = num_cycles,
+                                          dimnames = list(v_states_names[1:4], paste("cycle", 1:num_cycles, sep ="_")))
+  # Vector to store the overall actual proportion of deaths in the cohort per cycle
+  v_Actual_prop_deaths_overall <- rep(NA, num_cycles)
+  names(v_Actual_prop_deaths_overall) <- paste("cycle", 1:num_cycles, sep ="_")
+  # Matrix to store the average death probability for individuals in each NYHA class per cycle (from m_trans_probs)
+  m_Avg_p_death_by_class <- matrix(NA, nrow = 4, ncol = num_cycles,
+                                   dimnames = list(v_states_names[1:4], paste("cycle", 1:num_cycles, sep ="_")))
+  
   # Track discontinuation status (0 = on treatment, 1 = discontinued)
   v_discontinued <- rep(0, num_i)
-  # NEW: Track cycles since discontinuation to model waning effect
-  v_cycles_since_disc <- rep(0, num_i)
   
   set.seed(starting_seed)
   m_States[, 1] <- v_starting_states
@@ -331,39 +365,39 @@ run_microSimV_hosp_disc <- function(
     eligible_to_disc <- (v_discontinued == 0) & (m_States[, t] != "Death")
     if (any(eligible_to_disc)) {
       n_eligible <- sum(eligible_to_disc)
-      new_disc_events <- rbinom(n = n_eligible, size = 1, prob = p_disc)
-      # Update discontinuation status for those who were eligible and had a discontinuation event
-      v_discontinued[which(eligible_to_disc)][new_disc_events == 1] <- 1
-    }
-    
-    # NEW: Increment counter for anyone who is marked as discontinued
-    v_cycles_since_disc[v_discontinued == 1] <- v_cycles_since_disc[v_discontinued == 1] + 1
-    
-    # NEW: Determine who is "effectively" discontinued for transition probability calculation
-    # This allows for a waning effect where treatment benefit persists after stopping the drug.
-    v_effective_disc <- v_discontinued # By default, everyone discontinued switches to SoC probs
-    
-    if (arm_name == "silencer") {
-      waning_period_cycles <- 1 / cycle_length # 1 year / 0.5 years/cycle = 2 cycles
-      # Patients still in the waning period are NOT "effectively" discontinued for transition probability purposes
-      # They will continue to use the treatment arm probabilities.
-      indices_in_waning <- which(v_discontinued == 1 & v_cycles_since_disc <= waning_period_cycles)
-      if (length(indices_in_waning) > 0) {
-        v_effective_disc[indices_in_waning] <- 0
-      }
+      # Sample discontinuation events
+      new_disc <- rbinom(n = n_eligible, size = 1, prob = p_disc)
+      v_discontinued[eligible_to_disc] <- new_disc
     }
     
     # 2. Update transition probabilities
+    # Uses v_discontinued to select between arm probs and SoC probs
     m_trans_probs <- update_probsV_disc(
       v_states_names    = v_states_names,
       v_occupied_state  = m_States[, t],
       l_trans_probs_arm = l_trans_probs_arm_t, # Use time-dependent probabilities
       l_trans_probs_soc = l_trans_probs_soc_t, # NEW: Use time-dependent SoC probabilities
-      v_discontinued    = v_effective_disc, # Use the effective vector for transitions
+      v_discontinued    = v_discontinued,
       m_indi_features   = m_indi_features,
+      mort_mult_arm     = mort_mult_arm,       # NEW: Pass multiplier
+      mort_mult_soc     = mort_mult_soc,       # NEW: Pass multiplier
       params_gompertz_sex = params_gompertz_sex,
       cycle_length      = cycle_length
     )
+    
+    # NEW: Calculate and store average death probabilities for each state
+    # The 'Death' column of m_trans_probs has the probability of death for each individual
+    for (i in 1:4) {
+      state_name <- v_states_names[i]
+      # Find individuals in this state at the start of the cycle (who are not already dead)
+      idx_in_state <- which(m_States[, t] == state_name)
+      if (length(idx_in_state) > 0) {
+        # Get their death probabilities from the transition matrix and calculate the average
+        m_Avg_p_death_by_class[state_name, t] <- mean(m_trans_probs[idx_in_state, "Death"])
+        # Store the number of individuals at risk in this class
+        m_Num_at_risk_by_class[state_name, t] <- length(idx_in_state)
+      }
+    }
     
     # 3. Sample next state
     m_States[, t + 1] <- sampleV(
@@ -380,18 +414,39 @@ run_microSimV_hosp_disc <- function(
     )
     m_Hosp[, t + 1] <- l_hosp_results$hosp_ind
     
-# 4a. Update discontinuation status for patients entering NYHA4
+    # NEW: Count the number of actual deaths from each NYHA class and calculate proportions
+    # Identify individuals who died in this cycle
+    newly_dead_idx <- which(m_States[, t] != "Death" & m_States[, t + 1] == "Death")
+    
+    if (length(newly_dead_idx) > 0) {
+      # Get their state at the beginning of the cycle (before they died)
+      states_before_death <- m_States[newly_dead_idx, t]
+      # Count deaths originating from each NYHA class
+      for (i in 1:4) {
+        state_name <- v_states_names[i]
+        deaths_from_this_class <- sum(states_before_death == state_name)
+        m_Actual_deaths_count_by_class[state_name, t] <- deaths_from_this_class
+        
+        # Calculate actual proportion of deaths from this class
+        if (m_Num_at_risk_by_class[state_name, t] > 0) {
+          m_Actual_prop_deaths_by_class[state_name, t] <- deaths_from_this_class / m_Num_at_risk_by_class[state_name, t]
+        }
+      }
+      # Calculate overall actual proportion of deaths in the cohort
+      total_alive_at_start <- sum(m_States[, t] != "Death")
+      v_Actual_prop_deaths_overall[t] <- length(newly_dead_idx) / total_alive_at_start
+    }
+    
+    # 4a. Update discontinuation status for patients entering NYHA4
     # Patients who move to the NYHA4 state are considered to have discontinued treatment.
-    # This is a model assumption. Once discontinued, they remain so.
-    # This will affect their costs for the current cycle (step 6) and transition probabilities for the next cycle.
     v_discontinued[m_States[, t + 1] == "NYHA4"] <- 1
-
+     
     # 5. Update time in state and age
     # Age individuals by the cycle length
     m_indi_features[, "age"] <- m_indi_features[, "age"] + cycle_length
     
     # 6. Calculate Costs
-    # Uses the REAL v_discontinued vector to remove drug costs immediately upon discontinuation
+    # Uses v_discontinued to remove drug costs if applicable
     m_Costs[, t + 1]  <- calc_costsV_disc(
       v_occupied_state   = m_States[, t + 1],
       v_states_costs_arm = v_states_costs_arm,
@@ -412,7 +467,6 @@ run_microSimV_hosp_disc <- function(
   v_e_dsc_wts <- calc_discount_wts(discount_rate_QALYs, num_cycles, cycle_length)
   
   # Apply Life-Table Correction to Undiscounted Costs/QALYs
-  # Logic: (Current + Next) / 2. Vectorized for matrices: (M[, -last] + M[, -1]) / 2
   m_Costs_LT <- (m_Costs[, -ncol(m_Costs)] + m_Costs[, -1]) / 2
   m_Effs_LT  <- (m_Effs[, -ncol(m_Effs)]  + m_Effs[, -1]) / 2
   
@@ -424,7 +478,7 @@ run_microSimV_hosp_disc <- function(
   # Apply Life-Table Correction to Discounted Costs/QALYs
   # First, apply discount weights to the raw matrices (broadcast column-wise)
   m_Costs_D <- t(t(m_Costs) * v_c_dsc_wts)
-  m_Effs_D  <- t(t(m_Effs)  * v_e_dsc_wts)
+  m_Effs_D  <- t(t(m_Effs) * v_e_dsc_wts)
   
   # Then apply correction to the discounted values and sum
   v_total_Dcosts <- rowSums((m_Costs_D[, -ncol(m_Costs_D)] + m_Costs_D[, -1]) / 2)
@@ -435,7 +489,7 @@ run_microSimV_hosp_disc <- function(
   results <- list(
     m_States       = m_States,
     m_Costs        = m_Costs,
-    m_Effs         = m_Effs,
+    m_Effs         = m_Effs, # This line was missing
     v_total_costs  = v_total_costs,
     v_total_qalys  = v_total_qalys,
     v_total_Dcosts = v_total_Dcosts,
@@ -443,7 +497,12 @@ run_microSimV_hosp_disc <- function(
     mean_costs     = mean_costs,
     mean_qalys     = mean_qalys,
     mean_Dcosts    = mean_Dcosts,
-    mean_Dqalys    = mean_Dqalys
+    mean_Dqalys    = mean_Dqalys,
+    # NEW mortality metrics
+    m_Actual_deaths_count_by_class = m_Actual_deaths_count_by_class,
+    m_Actual_prop_deaths_by_class = m_Actual_prop_deaths_by_class,
+    v_Actual_prop_deaths_overall = v_Actual_prop_deaths_overall,
+    m_Avg_p_death_by_class = m_Avg_p_death_by_class
   )
   
   return(results)
@@ -464,8 +523,8 @@ discount_rate_costs <- 0.03
 discount_rate_QALYs <- 0.03              
 
 ## Population characteristics
-mean_age            <- 77                
-sd_age              <- 5                 
+mean_age            <- 77.3                
+sd_age              <- 0 #5                
 set.seed(seed)
 # Create separate populations for males and females to account for different mortality
 m_indi_features_male <- cbind(
@@ -483,25 +542,22 @@ v_starting_states <- sample(x = v_states_names, size = num_i, replace = TRUE, pr
 ## Transition and Mortality Parameters
 
 # --- Background Mortality Parameters (from workingTRACE_mortality_fitting.R) --- #
-# !!! IMPORTANT !!!
-# Please replace these placeholder values with the actual values from your fitting script output.
 params_gompertz <- list(
   male = list(
-    shape = 0.1014027, 
-    rate  = 1.934313e-05    
+    shape = 0.07943271, #0.1014027 
+    rate  = 0.0001155519 #1.934313e-05    
   ),
   female = list(
-    shape = 0.1089245, 
-    rate  = 7.472652e-06     
+    shape = 0.09307892, #0.1089245 
+    rate  = 2.864362e-05 #7.472652e-06     
   )
 )
 
 # Hazard Ratios for mortality (relative to background mortality)
-rr_HF   <- 3.17                   
-rr_2v1  <- 1.78                   
-rr_3v1  <- 3.51                   
-rr_4v1  <- 5.74                   
-# NOTE: p_HtoD and rp_sv are removed as they are replaced by the Gompertz model
+rr_HF   <- 1 #3.17                   
+rr_2v1  <- 1.78 #1                    
+rr_3v1  <- 3.51 #1                   
+rr_4v1  <- 5.74 #1                   
 
 # NEW: Time-varying transition probabilities for treatment arms
 # A list of lists, where each inner list corresponds to a 6-month cycle.
@@ -541,10 +597,7 @@ l_trans_probs_st_tv <- list(
        "rr_HF" = rr_HF, "rr_2v1" = rr_2v1, "rr_3v1" = rr_3v1, "rr_4v1" = rr_4v1)
 )
 
-# 2. Silencers - Time-Varying (Set to be same as Stabilizers per request)
-l_trans_probs_si_tv <- l_trans_probs_st_tv
-
-# 3. Standard of Care (SoC) - Time-Varying
+# 2. Standard of Care (SoC) - Time-Varying
 l_trans_probs_soc_tv <- list(
   # Cycle 1 (6 months)
   list("p_1to1" = 0.538, "p_1to2" = 0.462, "p_1to3" = 0,     "p_1to4" = 0,
@@ -584,16 +637,13 @@ l_trans_probs_soc_tv <- list(
 # P(Disc in 2.5y) = 1 - (1 - p_cycle)^5
 # p_cycle = 1 - (1 - P_2.5y)^(1/5)
 
-p_disc_2.5y_st <- 0.212
-p_disc_2.5y_si <- 0.093
-
-p_disc_st <- 1 - (1 - p_disc_2.5y_st)^(1/5)
-p_disc_si <- 1 - (1 - p_disc_2.5y_si)^(1/5)
+#p_disc_2.5y_st <- 0.212
+p_disc_st <- 0.019333235
+#p_disc_st <- 1 - (1 - p_disc_2.5y_st)^(1/5)
 
 ## Cost and utility inputs
-c_discount     <- 0.28
+c_discount     <- 0.275
 c_st           <- 112555
-c_si           <- 238850
 
 # Base Costs (SoC Costs) - Derived from original file logic
 c_NYHA1_base   <- 2911
@@ -608,11 +658,6 @@ c_NYHA2_st     <- c_NYHA2_base + (c_st * (1-c_discount))
 c_NYHA3_st     <- c_NYHA3_base + (c_st * (1-c_discount))
 c_NYHA4_st     <- c_NYHA4_base + (c_st * (1-c_discount))
 
-c_NYHA1_si     <- c_NYHA1_base + (c_si * (1-c_discount))
-c_NYHA2_si     <- c_NYHA2_base + (c_si * (1-c_discount))
-c_NYHA3_si     <- c_NYHA3_base + (c_si * (1-c_discount))
-c_NYHA4_si     <- c_NYHA4_base + (c_si * (1-c_discount))
-
 # Utilities (Unchanged)
 u_NYHA1   <- 0.82
 u_NYHA2   <- 0.729
@@ -622,7 +667,6 @@ u_Death   <- 0
 
 # Cost Vectors
 v_states_costs_st  <- c("NYHA1" = c_NYHA1_st, "NYHA2" = c_NYHA2_st, "NYHA3" = c_NYHA3_st, "NYHA4" = c_NYHA4_st,"Death" = c_D)
-v_states_costs_si  <- c("NYHA1" = c_NYHA1_si, "NYHA2" = c_NYHA2_si, "NYHA3" = c_NYHA3_si, "NYHA4" = c_NYHA4_si,"Death" = c_D)
 v_states_costs_soc <- c("NYHA1" = c_NYHA1_base, "NYHA2" = c_NYHA2_base, "NYHA3" = c_NYHA3_base, "NYHA4" = c_NYHA4_base,"Death" = c_D)
 
 # Utility Vectors
@@ -630,16 +674,120 @@ v_states_utilities <- c("NYHA1" = u_NYHA1, "NYHA2" = u_NYHA2, "NYHA3" = u_NYHA3,
 
 # Hospitalization parameters
 v_hosp_probs_st <- c("NYHA1" = 0.1683, "NYHA2" = 0.3107, "NYHA3" = 0.698, "NYHA4" = 0.8627, "Death" = 0)
-v_hosp_probs_si <- c("NYHA1" = 0.1481, "NYHA2" = 0.2134, "NYHA3" = 0.61424, "NYHA4" = 0.7591, "Death" = 0)
+# Per request, SoC arm will use the same hospitalization probabilities as the Stabilizer arm.
+v_hosp_probs_soc <- v_hosp_probs_st
 
 v_hosp_costs    <- c("NYHA1" = 30584.15689, "NYHA2" = 17400.10754, "NYHA3" = 17694.56047, "NYHA4" = 21041.54226, "Death" = 0)
 v_hosp_disutils <- c("NYHA1" = 0.023, "NYHA2" = 0.01, "NYHA3" = 0.027, "NYHA4" = 0.07, "Death" = 0)
 
-### Running the simulation ###
+### Calibrating Mortality Multipliers ###
 
-cat("\n--- Running Simulation for MALE Cohort ---\n")
+cat("\n--- Calibrating Mortality Multipliers to Match 30-Month Survival ---\n")
 
-## Stabilizers vs SoC for MALES
+# Define the objective function for calibration.
+# This function runs a simulation with a given mortality multiplier and returns
+# the difference between the simulated 30-month survival and the target survival.
+# Note: We run this on the MALE cohort parameters as a reference. The multiplier is sex-independent.
+get_survival_diff <- function(
+    multiplier,
+    target_survival,
+    arm_params, # A list containing params for the specific arm to run
+    common_params # A list of params common to all simulations
+) {
+  
+  # Run the simulation with the given multiplier.
+  # For the 'stabilizer' arm, the multiplier applies to both on-treatment and post-discontinuation mortality.
+  # For the 'soc' arm, there is no discontinuation, so the multiplier only applies to the main arm.
+  sim_results <- run_microSimV_hosp_disc(
+    v_starting_states   = common_params$v_starting_states,
+    num_i               = common_params$num_i,
+    num_cycles          = 5, # Only need to run for 5 cycles (30 months)
+    m_indi_features     = common_params$m_indi_features_male,
+    v_states_names      = common_params$v_states_names,
+    v_states_costs_arm  = arm_params$v_states_costs_arm,
+    v_states_costs_soc  = arm_params$v_states_costs_soc,
+    v_states_utilities  = common_params$v_states_utilities,
+    l_trans_probs_arm   = arm_params$l_trans_probs_arm,
+    l_trans_probs_soc   = arm_params$l_trans_probs_soc,
+    p_disc              = arm_params$p_disc,
+    params_gompertz_sex = common_params$params_gompertz$male,
+    mort_mult_arm       = multiplier,
+    mort_mult_soc       = multiplier, # Apply same multiplier to discontinued patients for simplicity
+    v_hosp_probs        = arm_params$v_hosp_probs,
+    v_hosp_costs        = common_params$v_hosp_costs,
+    v_hosp_disutils     = common_params$v_hosp_disutils,
+    discount_rate_costs = common_params$discount_rate_costs,
+    discount_rate_QALYs = common_params$discount_rate_QALYs,
+    cycle_length        = common_params$cycle_length,
+    starting_seed       = common_params$seed
+  )
+  
+  # Calculate survival at 30 months (end of cycle 5)
+  # m_States has num_cycles + 1 columns, so col 6 is end of cycle 5
+  survival_at_30m <- sum(sim_results$m_States[, 6] != "Death") / common_params$num_i
+  
+  # Return the difference to be minimized by uniroot
+  return(survival_at_30m - target_survival)
+}
+
+# --- Define parameter sets for calibration ---
+
+# Parameters common to all simulations
+common_params <- list(
+  v_starting_states   = v_starting_states,
+  num_i               = num_i,
+  m_indi_features_male= m_indi_features_male,
+  v_states_names      = v_states_names,
+  v_states_utilities  = v_states_utilities,
+  params_gompertz     = params_gompertz,
+  v_hosp_costs        = v_hosp_costs,
+  v_hosp_disutils     = v_hosp_disutils,
+  discount_rate_costs = discount_rate_costs,
+  discount_rate_QALYs = discount_rate_QALYs,
+  cycle_length        = cycle_length,
+  seed                = seed
+)
+
+# Parameters for the SoC (Placebo) arm
+soc_params <- list(
+  v_states_costs_arm  = v_states_costs_soc,
+  v_states_costs_soc  = v_states_costs_soc,
+  l_trans_probs_arm   = l_trans_probs_soc_tv,
+  l_trans_probs_soc   = l_trans_probs_soc_tv,
+  p_disc              = 0, # No discontinuation in pure SoC arm
+  v_hosp_probs        = v_hosp_probs_soc
+)
+
+# Parameters for the Stabilizer (Tafamidis) arm
+st_params <- list(
+  v_states_costs_arm  = v_states_costs_st,
+  v_states_costs_soc  = v_states_costs_soc,
+  l_trans_probs_arm   = l_trans_probs_st_tv,
+  l_trans_probs_soc   = l_trans_probs_soc_tv,
+  p_disc              = p_disc_st,
+  v_hosp_probs        = v_hosp_probs_st
+)
+
+
+# --- Run Calibration for SoC (Placebo) Arm ---
+cat("Calibrating for SoC (Placebo) arm... Target survival: 0.58\n")
+soc_calibration_result <- uniroot(get_survival_diff, interval = c(0.1, 5), target_survival = 0.58, arm_params = soc_params, common_params = common_params, tol = 1e-4)
+calibrated_mult_soc <- soc_calibration_result$root
+cat("-> Calibrated SoC Mortality Multiplier:", calibrated_mult_soc, "\n")
+
+
+# --- Run Calibration for Stabilizer (Tafamidis) Arm ---
+cat("Calibrating for Stabilizer (Tafamidis) arm... Target survival: 0.70\n")
+st_calibration_result <- uniroot(get_survival_diff, interval = c(0.1, 2), target_survival = 0.70, arm_params = st_params, common_params = common_params, tol = 1e-4)
+calibrated_mult_st <- st_calibration_result$root
+cat("-> Calibrated Stabilizer Mortality Multiplier:", calibrated_mult_st, "\n")
+
+
+### Running the simulation for Validation (Stabilizer vs SoC) ###
+
+cat("\n--- Running Validation Simulation for MALE Cohort (Stabilizer vs. SoC) ---\n")
+
+## Stabilizer Arm (Male)
 res_st_male <- run_microSimV_hosp_disc(
   v_starting_states   = v_starting_states,
   num_i               = num_i,
@@ -652,7 +800,8 @@ res_st_male <- run_microSimV_hosp_disc(
   l_trans_probs_arm   = l_trans_probs_st_tv,
   l_trans_probs_soc   = l_trans_probs_soc_tv,
   p_disc              = p_disc_st,
-  arm_name            = "stabilizer",
+  mort_mult_arm       = calibrated_mult_st, # Use calibrated multiplier
+  mort_mult_soc       = calibrated_mult_st, # Use calibrated multiplier
   params_gompertz_sex = params_gompertz$male,
   v_hosp_probs        = v_hosp_probs_st,
   v_hosp_costs        = v_hosp_costs,
@@ -660,36 +809,38 @@ res_st_male <- run_microSimV_hosp_disc(
   discount_rate_costs = discount_rate_costs,
   discount_rate_QALYs = discount_rate_QALYs,
   cycle_length        = cycle_length,
-  starting_seed       = seed # Use same seed for comparability
+  starting_seed       = seed
 )
 
-## Silencers vs SoC for MALES
-res_si_male <- run_microSimV_hosp_disc(
+## Standard of Care (SoC) Arm (Male)
+# To run an SoC arm, we set arm parameters to SoC and discontinuation probability to 0.
+res_soc_male <- run_microSimV_hosp_disc(
   v_starting_states   = v_starting_states,
   num_i               = num_i,
   num_cycles          = num_cycles,
   m_indi_features     = m_indi_features_male,
   v_states_names      = v_states_names,
-  v_states_costs_arm  = v_states_costs_si,
-  v_states_costs_soc  = v_states_costs_soc,
+  v_states_costs_arm  = v_states_costs_soc,   # Use SoC costs as the "arm" cost
+  v_states_costs_soc  = v_states_costs_soc,   # SoC costs for discontinuation (won't happen)
   v_states_utilities  = v_states_utilities,
-  l_trans_probs_arm   = l_trans_probs_si_tv,
-  l_trans_probs_soc   = l_trans_probs_soc_tv,
-  p_disc              = p_disc_si,
-  arm_name            = "silencer",
+  l_trans_probs_arm   = l_trans_probs_soc_tv, # Use SoC probs as the "arm" probs
+  l_trans_probs_soc   = l_trans_probs_soc_tv, # SoC probs for discontinuation (won't happen)
+  p_disc              = 0,                    # No discontinuation for SoC arm
+  mort_mult_arm       = calibrated_mult_soc,  # Use calibrated multiplier
+  mort_mult_soc       = calibrated_mult_soc,  # Use calibrated multiplier
   params_gompertz_sex = params_gompertz$male,
-  v_hosp_probs        = v_hosp_probs_si,
+  v_hosp_probs        = v_hosp_probs_soc,     # Use specified hosp probs for SoC arm
   v_hosp_costs        = v_hosp_costs,
   v_hosp_disutils     = v_hosp_disutils,
   discount_rate_costs = discount_rate_costs,
   discount_rate_QALYs = discount_rate_QALYs,
   cycle_length        = cycle_length,
-  starting_seed       = seed # Use same seed for comparability
+  starting_seed       = seed 
 )
 
-cat("\n--- Running Simulation for FEMALE Cohort ---\n")
+cat("\n--- Running Validation Simulation for FEMALE Cohort (Stabilizer vs. SoC) ---\n")
 
-## Stabilizers vs SoC for FEMALES
+## Stabilizer Arm (Female)
 res_st_female <- run_microSimV_hosp_disc(
   v_starting_states   = v_starting_states,
   num_i               = num_i,
@@ -702,7 +853,8 @@ res_st_female <- run_microSimV_hosp_disc(
   l_trans_probs_arm   = l_trans_probs_st_tv,
   l_trans_probs_soc   = l_trans_probs_soc_tv,
   p_disc              = p_disc_st,
-  arm_name            = "stabilizer",
+  mort_mult_arm       = calibrated_mult_st, # Use calibrated multiplier
+  mort_mult_soc       = calibrated_mult_st, # Use calibrated multiplier
   params_gompertz_sex = params_gompertz$female,
   v_hosp_probs        = v_hosp_probs_st,
   v_hosp_costs        = v_hosp_costs,
@@ -710,87 +862,74 @@ res_st_female <- run_microSimV_hosp_disc(
   discount_rate_costs = discount_rate_costs,
   discount_rate_QALYs = discount_rate_QALYs,
   cycle_length        = cycle_length,
-  starting_seed       = seed # Use same seed for comparability
+  starting_seed       = seed
 )
 
-## Silencers vs SoC for FEMALES
-res_si_female <- run_microSimV_hosp_disc(
+## Standard of Care (SoC) Arm (Female)
+res_soc_female <- run_microSimV_hosp_disc(
   v_starting_states   = v_starting_states,
   num_i               = num_i,
   num_cycles          = num_cycles,
   m_indi_features     = m_indi_features_female,
   v_states_names      = v_states_names,
-  v_states_costs_arm  = v_states_costs_si,
+  v_states_costs_arm  = v_states_costs_soc,
   v_states_costs_soc  = v_states_costs_soc,
   v_states_utilities  = v_states_utilities,
-  l_trans_probs_arm   = l_trans_probs_si_tv,
+  l_trans_probs_arm   = l_trans_probs_soc_tv,
   l_trans_probs_soc   = l_trans_probs_soc_tv,
-  p_disc              = p_disc_si,
-  arm_name            = "silencer",
+  p_disc              = 0,
+  mort_mult_arm       = calibrated_mult_soc,  # Use calibrated multiplier
+  mort_mult_soc       = calibrated_mult_soc,  # Use calibrated multiplier
   params_gompertz_sex = params_gompertz$female,
-  v_hosp_probs        = v_hosp_probs_si,
+  v_hosp_probs        = v_hosp_probs_soc,
   v_hosp_costs        = v_hosp_costs,
   v_hosp_disutils     = v_hosp_disutils,
   discount_rate_costs = discount_rate_costs,
   discount_rate_QALYs = discount_rate_QALYs,
   cycle_length        = cycle_length,
-  starting_seed       = seed # Use same seed for comparability
+  starting_seed       = seed
 )
 
 ### Analyzing the results ###
 
-cat("\n--- MALE COHORT RESULTS ---\n")
-nb_st_male <- res_st_male$mean_Dqalys * wtp - res_st_male$mean_Dcosts
-nb_si_male <- res_si_male$mean_Dqalys * wtp - res_si_male$mean_Dcosts
-cat("Net Monetary Benefit (Stabilizers):", nb_st_male, "\n")
-cat("Net Monetary Benefit (Silencers):", nb_si_male, "\n")
+cat("\n--- MALE COHORT VALIDATION RESULTS (Stabilizer vs SoC) ---\n")
+cat("Mean Discounted Costs (Stabilizer):", res_st_male$mean_Dcosts, "\n")
+cat("Mean Discounted Costs (SoC):", res_soc_male$mean_Dcosts, "\n")
+cat("Mean Discounted QALYs (Stabilizer):", res_st_male$mean_Dqalys, "\n")
+cat("Mean Discounted QALYs (SoC):", res_soc_male$mean_Dqalys, "\n")
 
-ICER_male <- (res_st_male$mean_Dcosts - res_si_male$mean_Dcosts) / (res_st_male$mean_Dqalys - res_si_male$mean_Dqalys)
-cat("ICER (Stabilizers vs Silencers):", ICER_male, "\n")
+ICER_male <- (res_st_male$mean_Dcosts - res_soc_male$mean_Dcosts) / (res_st_male$mean_Dqalys - res_soc_male$mean_Dqalys)
+cat("ICER (Stabilizer vs SoC):", ICER_male, "\n")
 
-cat("\n--- FEMALE COHORT RESULTS ---\n")
-nb_st_female <- res_st_female$mean_Dqalys * wtp - res_st_female$mean_Dcosts
-nb_si_female <- res_si_female$mean_Dqalys * wtp - res_si_female$mean_Dcosts
-cat("Net Monetary Benefit (Stabilizers):", nb_st_female, "\n")
-cat("Net Monetary Benefit (Silencers):", nb_si_female, "\n")
 
-ICER_female <- (res_st_female$mean_Dcosts - res_si_female$mean_Dcosts) / (res_st_female$mean_Dqalys - res_si_female$mean_Dqalys)
-cat("ICER (Stabilizers vs Silencers):", ICER_female, "\n")
-#------------------------------------------------------------------------------#
+cat("\n--- FEMALE COHORT VALIDATION RESULTS (Stabilizer vs SoC) ---\n")
+cat("Mean Discounted Costs (Stabilizer):", res_st_female$mean_Dcosts, "\n")
+cat("Mean Discounted Costs (SoC):", res_soc_female$mean_Dcosts, "\n")
+cat("Mean Discounted QALYs (Stabilizer):", res_st_female$mean_Dqalys, "\n")
+cat("Mean Discounted QALYs (SoC):", res_soc_female$mean_Dqalys, "\n")
 
-## @knitr micro_run_microSimV_diagram
+ICER_female <- (res_st_female$mean_Dcosts - res_soc_female$mean_Dcosts) / (res_st_female$mean_Dqalys - res_soc_female$mean_Dqalys)
+cat("ICER (Stabilizer vs SoC):", ICER_female, "\n")
 
-if (requireNamespace("DiagrammeR", quietly = TRUE)) {
-  DiagrammeR::grViz("
-  digraph flowchart {
-    node [fontname = 'Helvetica', shape = box, style=filled, fillcolor='grey', fontsize=16]
-    edge [fontname = 'Helvetica']
+### Mortality Analysis ###
+# The following code demonstrates how to access the mortality data for the MALE STABILIZER arm.
+# You can do the same for other results (res_soc_male, res_st_female, res_soc_female).
 
-    input [shape = box, label = 'Inputs: v_starting_states, num_i, num_cycles, m_indi_features, v_states_names, v_states_costs, v_cost_coeffs, v_states_utilities, v_util_coeffs, v_util_t_decs, l_trans_probs, cycle_length, starting_seed', style=filled, fillcolor='yellow', width=3.5]
-    initialize_matrices [label = 'Initialize m_States, m_Costs, m_Effs', style=filled, fillcolor='palegreen']
-    calc_initial_costs [label = 'Set seed, get starting health state, and calculate initial costs and QALYs', style=filled, fillcolor='palegreen']
-    loop_cycles [shape = diamond, style=filled, fillcolor='skyblue', fontsize=24, fontname='Helvetica-Bold', label = 'For each cycle t']
-    update_probs [label = 'Update transition probabilities for cycle (t)', style=filled, fillcolor='palegreen']
-    sample_state [label = 'Sample health state for cycle (t + 1)', style=filled, fillcolor='palegreen']
-    calculate_cycle_costs [label = 'Calculate payoffs (costs and QALYs) for cycle (t + 1)', style=filled, fillcolor='palegreen']
-    update_time [label = 'Update time in state for cycle (t + 1)', style=filled, fillcolor='palegreen']
-    update_age [label = 'Advance age if alive for cycle (t + 1)', style=filled, fillcolor='palegreen']
-    check_cycles [label = 'Was this the last cycle?', shape = diamond, style=filled, fillcolor='skyblue', fontsize=24, fontname='Helvetica-Bold']
-    summarize_results [label = 'Discount and summarize costs and QALYs', style=filled, fillcolor='palegreen']
-    return_results [shape = ellipse, label = 'Return results', style=filled, fillcolor='yellow']
+cat("\n--- MORTALITY ANALYSIS (Example: Male Stabilizer Arm) ---\n")
 
-    input -> initialize_matrices
-    initialize_matrices -> calc_initial_costs
-    calc_initial_costs -> loop_cycles
-    loop_cycles -> update_probs
-    update_probs -> sample_state
-    sample_state ->  update_time -> update_age -> calculate_cycle_costs
-    calculate_cycle_costs -> check_cycles
-    check_cycles -> loop_cycles [label = 'No\nNext cycle']
-    check_cycles -> summarize_results [label = 'Yes']
-    summarize_results -> return_results
-  }
-  ")
-} else {
-  message("DiagrammeR package not installed. Flowchart skipped.")
-}
+cat("\nAverage mortality PROBABILITY per cycle for individuals in each NYHA class:\n")
+cat("This is the average probability of death for individuals in a given class at the start of a cycle, based on model parameters.\n")
+cat("You can compare this with your Excel values for 'probability of mortality based on cycle length'.\n")
+print(t(res_st_male$m_Avg_p_death_by_class)) # Transpose and show first 6 cycles
+
+cat("\nActual PROPORTION of deaths per cycle from each NYHA class:\n")
+cat("This shows the proportion of individuals who died from each class, relative to the number of individuals in that class at the start of the cycle.\n")
+print(t(res_st_male$m_Actual_prop_deaths_by_class)) # Transpose and show first 6 cycles
+
+cat("\nOverall Actual PROPORTION of deaths per cycle in the cohort:\n")
+cat("This shows the total number of deaths in a cycle divided by the total number of alive individuals at the start of that cycle.\n")
+print(res_st_male$v_Actual_prop_deaths_overall) # Show first 6 cycles
+
+cat("\nActual NUMBER of deaths per cycle from each NYHA class:\n")
+cat("This shows how many individuals actually transitioned to 'Death' from each class in each cycle.\n")
+print(t(res_st_male$m_Actual_deaths_count_by_class)) # Transpose and show first 6 cycles
