@@ -295,7 +295,7 @@ run_microSimV_hosp_disc <- function(
     starting_seed = 1) {
   
   # Create matrices to capture states, costs, QALYs, and Hospitalizations
-  m_States <- m_Costs <- m_Effs <- m_Hosp <- matrix(
+  m_States <- m_Costs <- m_Effs <- m_Hosp <- m_LYs <- matrix(
     nrow = num_i,
     ncol = num_cycles + 1,
     dimnames = list(paste("ind",   1:num_i,    sep ="_"),
@@ -324,6 +324,9 @@ run_microSimV_hosp_disc <- function(
     v_states_utilities = v_states_utilities,
     cycle_length       = cycle_length
   )
+  
+  # Calculate Life Years for cycle 0
+  m_LYs[, 1] <- (m_States[, 1] != "Death") * cycle_length
   
   for (t in 1:num_cycles) {
     
@@ -417,6 +420,9 @@ run_microSimV_hosp_disc <- function(
       v_states_utilities = v_states_utilities,
       cycle_length       = cycle_length
     ) - l_hosp_results$disutils
+    
+    # NEW: Calculate Life Years for cycle t
+    m_LYs[, t + 1] <- (m_States[, t + 1] != "Death") * cycle_length
   }
   
   # Discounting and Summary
@@ -427,35 +433,47 @@ run_microSimV_hosp_disc <- function(
   # Logic: (Current + Next) / 2. Vectorized for matrices: (M[, -last] + M[, -1]) / 2
   m_Costs_LT <- (m_Costs[, -ncol(m_Costs)] + m_Costs[, -1]) / 2
   m_Effs_LT  <- (m_Effs[, -ncol(m_Effs)]  + m_Effs[, -1]) / 2
+  # NEW: Apply Life-Table Correction to Life Years
+  m_LYs_LT <- (m_LYs[, -ncol(m_LYs)] + m_LYs[, -1]) / 2
   
   v_total_costs <- rowSums(m_Costs_LT)
   v_total_qalys <- rowSums(m_Effs_LT)
+  v_total_lys <- rowSums(m_LYs_LT)
   mean_costs    <- mean(v_total_costs)
   mean_qalys    <- mean(v_total_qalys)
+  mean_lys    <- mean(v_total_lys)
   
   # Apply Life-Table Correction to Discounted Costs/QALYs
   # First, apply discount weights to the raw matrices (broadcast column-wise)
   m_Costs_D <- t(t(m_Costs) * v_c_dsc_wts)
   m_Effs_D  <- t(t(m_Effs)  * v_e_dsc_wts)
+  m_LYs_D <- t(t(m_LYs) * v_e_dsc_wts)
   
   # Then apply correction to the discounted values and sum
   v_total_Dcosts <- rowSums((m_Costs_D[, -ncol(m_Costs_D)] + m_Costs_D[, -1]) / 2)
   v_total_Dqalys <- rowSums((m_Effs_D[, -ncol(m_Effs_D)]  + m_Effs_D[, -1]) / 2)
+  v_total_Dlys <- rowSums((m_LYs_D[, -ncol(m_LYs_D)] + m_LYs_D[, -1]) / 2)
   mean_Dcosts    <- mean(v_total_Dcosts)
   mean_Dqalys    <- mean(v_total_Dqalys)
+  mean_Dlys    <- mean(v_total_Dlys)
   
   results <- list(
     m_States       = m_States,
     m_Costs        = m_Costs,
     m_Effs         = m_Effs,
+    m_LYs          = m_LYs,
     v_total_costs  = v_total_costs,
     v_total_qalys  = v_total_qalys,
+    v_total_lys    = v_total_lys,
     v_total_Dcosts = v_total_Dcosts,
     v_total_Dqalys = v_total_Dqalys,
+    v_total_Dlys   = v_total_Dlys,
     mean_costs     = mean_costs,
     mean_qalys     = mean_qalys,
+    mean_lys       = mean_lys,
     mean_Dcosts    = mean_Dcosts,
-    mean_Dqalys    = mean_Dqalys
+    mean_Dqalys    = mean_Dqalys,
+    mean_Dlys      = mean_Dlys
   )
   
   return(results)
@@ -476,8 +494,8 @@ discount_rate_costs <- 0.03
 discount_rate_QALYs <- 0.03              
 
 ## Population characteristics
-mean_age            <- 77.3                
-sd_age              <- 0 #5                 
+mean_age            <- 78.0                
+sd_age              <- 5 #0                 
 set.seed(seed)
 # Create separate populations for males and females to account for different mortality
 m_indi_features_male <- cbind(
@@ -489,7 +507,9 @@ m_indi_features_female <- cbind(
 
 ## Health states
 v_states_names <- c("NYHA1","NYHA2", "NYHA3", "NYHA4", "Death")
-p_starting <- c(0.108, 0.72, 0.172, 0, 0)
+p_starting <- c(0.134, 0.519, 0.337, 0.01, 0) #c(0.108, 0.72, 0.172, 0, 0)
+#p_starting <- c(0.126, 0.536, 0.326, 0.012, 0) #wtATTR
+#p_starting <- c(0.174, 0.44, 0.385, 0, 0) #vATTR
 v_starting_states <- sample(x = v_states_names, size = num_i, replace = TRUE, prob = p_starting)
 
 ## Transition and Mortality Parameters
@@ -729,8 +749,8 @@ si_params_calib <- list(
 )
 
 # --- Run Calibration ---
-cat("Calibrating for Stabilizer arm... Target survival: 0.77\n")
-st_calibration_result <- uniroot(get_survival_diff, interval = c(0.1, 5), target_survival = 0.77, arm_params = st_params_calib, common_params = common_params, tol = 1e-4)
+cat("Calibrating for Stabilizer arm... Target survival: 0.82\n")
+st_calibration_result <- uniroot(get_survival_diff, interval = c(0.1, 5), target_survival = 0.82, arm_params = st_params_calib, common_params = common_params, tol = 1e-4)
 calibrated_mult_st <- st_calibration_result$root
 cat("-> Calibrated Stabilizer Mortality Multiplier:", calibrated_mult_st, "\n")
 
@@ -856,6 +876,10 @@ cat("Mean Discounted Costs (Stabilizer):", res_st_male$mean_Dcosts, "\n")
 cat("Mean Discounted Costs (Silencer):",   res_si_male$mean_Dcosts, "\n")
 cat("Mean Discounted QALYs (Stabilizer):", res_st_male$mean_Dqalys, "\n")
 cat("Mean Discounted QALYs (Silencer):",   res_si_male$mean_Dqalys, "\n")
+cat("Mean Life Years (Stabilizer):", res_st_male$mean_lys, "\n")
+cat("Mean Life Years (Silencer):",   res_si_male$mean_lys, "\n")
+cat("Life Expectancy (Age at Death) (Stabilizer):", mean(m_indi_features_male[,"age"]) + res_st_male$mean_lys, "\n")
+cat("Life Expectancy (Age at Death) (Silencer):",   mean(m_indi_features_male[,"age"]) + res_si_male$mean_lys, "\n")
 
 ICER_male <- (res_si_male$mean_Dcosts - res_st_male$mean_Dcosts) / (res_si_male$mean_Dqalys - res_st_male$mean_Dqalys)
 cat("ICER (Silencer vs Stabilizer):", ICER_male, "\n")
@@ -865,9 +889,41 @@ cat("Mean Discounted Costs (Stabilizer):", res_st_female$mean_Dcosts, "\n")
 cat("Mean Discounted Costs (Silencer):",   res_si_female$mean_Dcosts, "\n")
 cat("Mean Discounted QALYs (Stabilizer):", res_st_female$mean_Dqalys, "\n")
 cat("Mean Discounted QALYs (Silencer):",   res_si_female$mean_Dqalys, "\n")
+cat("Mean Life Years (Stabilizer):", res_st_female$mean_lys, "\n")
+cat("Mean Life Years (Silencer):",   res_si_female$mean_lys, "\n")
+cat("Life Expectancy (Age at Death) (Stabilizer):", mean(m_indi_features_female[,"age"]) + res_st_female$mean_lys, "\n")
+cat("Life Expectancy (Age at Death) (Silencer):",   mean(m_indi_features_female[,"age"]) + res_si_female$mean_lys, "\n")
 
 ICER_female <- (res_si_female$mean_Dcosts - res_st_female$mean_Dcosts) / (res_si_female$mean_Dqalys - res_st_female$mean_Dqalys)
 cat("ICER (Silencer vs Stabilizer):", ICER_female, "\n")
+
+cat("\n--- OVERALL POPULATION RESULTS (Silencer vs Stabilizer) ---\n")
+
+# Define weights
+prop_male <- 0.875
+prop_female <- 0.125
+
+# Calculate weighted average costs and QALYs for each arm
+mean_Dcosts_st_overall <- (res_st_male$mean_Dcosts * prop_male) + (res_st_female$mean_Dcosts * prop_female)
+mean_Dcosts_si_overall <- (res_si_male$mean_Dcosts * prop_male) + (res_si_female$mean_Dcosts * prop_female)
+mean_Dqalys_st_overall <- (res_st_male$mean_Dqalys * prop_male) + (res_st_female$mean_Dqalys * prop_female)
+mean_Dqalys_si_overall <- (res_si_male$mean_Dqalys * prop_male) + (res_si_female$mean_Dqalys * prop_female)
+mean_lys_st_overall    <- (res_st_male$mean_lys * prop_male) + (res_st_female$mean_lys * prop_female)
+mean_lys_si_overall    <- (res_si_male$mean_lys * prop_male) + (res_si_female$mean_lys * prop_female)
+mean_start_age_overall <- (mean(m_indi_features_male[,"age"]) * prop_male) + (mean(m_indi_features_female[,"age"]) * prop_female)
+
+cat("Mean Discounted Costs (Stabilizer):", mean_Dcosts_st_overall, "\n")
+cat("Mean Discounted Costs (Silencer):",   mean_Dcosts_si_overall, "\n")
+cat("Mean Discounted QALYs (Stabilizer):", mean_Dqalys_st_overall, "\n")
+cat("Mean Discounted QALYs (Silencer):",   mean_Dqalys_si_overall, "\n")
+cat("Mean Life Years (Stabilizer):", mean_lys_st_overall, "\n")
+cat("Mean Life Years (Silencer):",   mean_lys_si_overall, "\n")
+cat("Life Expectancy (Age at Death) (Stabilizer):", mean_start_age_overall + mean_lys_st_overall, "\n")
+cat("Life Expectancy (Age at Death) (Silencer):",   mean_start_age_overall + mean_lys_si_overall, "\n")
+
+# Calculate the weighted ICER
+ICER_overall <- (mean_Dcosts_si_overall - mean_Dcosts_st_overall) / (mean_Dqalys_si_overall - mean_Dqalys_st_overall)
+cat("Weighted ICER (Silencer vs Stabilizer):", ICER_overall, "\n")
 
 if (requireNamespace("DiagrammeR", quietly = TRUE)) {
   DiagrammeR::grViz("
