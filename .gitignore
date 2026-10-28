@@ -2,3 +2,13 @@
 .Rhistory
 .RData
 .Ruserdata
+
+# macOS
+.DS_Store
+
+# R default graphics device output
+Rplots.pdf
+
+# Local output backups and test runs
+OWSA_output_backup_*/
+*_test.csv
