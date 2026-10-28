@@ -1,0 +1,8 @@
+"component","value","pct_of_inc"
+"Drug: price difference (at stabilizer time on treatment)",1288080.05597667,0.826205499643234
+"Drug: persistence (larger share of life on treatment)",265645.727692134,0.170391553038645
+"Drug: survival (treatment during added life)",10275.8636723915,0.00659118588190276
+"Non-intervention: NYHA mix (time in better classes)",-6007.54513986307,-0.00385338381017502
+"Non-intervention: survival (care during added life)",1040.51204099397,0.000667409425932288
+"Non-intervention: hospitalization residual (realized vs expected)",-3.52992628069478,-2.26417953830816e-06
+"Total incremental cost",1559031.08431605,1
