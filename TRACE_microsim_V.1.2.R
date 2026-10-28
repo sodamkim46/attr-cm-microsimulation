@@ -15,7 +15,7 @@ get_m_probs <- function(
     v_states_names,
     m_indi_features,
     params_gompertz_sex,
-    treatment_mortality_multiplier = 1) {
+    progression_multiplier = 1) {
   
   num_i <- nrow(m_indi_features)
   m_probs <- matrix(0,
@@ -46,8 +46,8 @@ get_m_probs <- function(
   else {cumulative_hazard_base <- (alpha / beta) * (exp(beta * (v_age + cycle_length)) - exp(beta * v_age))}
   
   # 2. Calculate state-specific cumulative mortality HAZARDS for the cycle
-  # Apply hazard ratios and the adjustment factor to the background cumulative hazard.
-  cum_h_base_disease <- cumulative_hazard_base * rr_HF * treatment_mortality_multiplier
+  # Apply hazard ratios to the background cumulative hazard.
+  cum_h_base_disease <- cumulative_hazard_base * rr_HF
   cum_h_1 <- cum_h_base_disease
   cum_h_2 <- cum_h_base_disease * rr_2v1
   cum_h_3 <- cum_h_base_disease * rr_3v1
@@ -95,6 +95,45 @@ get_m_probs <- function(
     m_probs[idx_death, "Death"] <- 1
   }
   
+  # NEW LOGIC: Apply progression multiplier to transition probabilities between non-death states
+  if (progression_multiplier != 1) {
+    # This logic modifies the probabilities of moving to a different health state (excluding death),
+    # and compensates by adjusting the probability of staying in the same state.
+
+    # 1. Identify the probabilities to be scaled (i.e., transitions to a different, non-death state)
+    is_progression <- matrix(TRUE, nrow = num_i, ncol = ncol(m_probs), dimnames = list(NULL, colnames(m_probs)))
+    
+    # Get column indices for 'stay' probabilities for each individual
+    stay_col_indices <- match(v_occupied_state, colnames(m_probs))
+    
+    # Exclude 'stay' probabilities from scaling
+    is_progression[cbind(1:num_i, stay_col_indices)] <- FALSE
+    
+    # Exclude 'Death' probabilities from scaling
+    is_progression[, "Death"] <- FALSE
+    
+    # Exclude individuals already in the 'Death' state
+    is_progression[v_occupied_state == "Death", ] <- FALSE
+
+    # 2. Calculate the change (delta) and apply it
+    # Sum of probabilities that will be scaled, for each individual
+    sum_progression_probs <- rowSums(m_probs * is_progression)
+    
+    # The amount to be subtracted from the 'stay' probability
+    delta <- sum_progression_probs * (progression_multiplier - 1)
+    
+    # Apply the multiplier to the progression probabilities
+    m_probs[is_progression] <- m_probs[is_progression] * progression_multiplier
+    
+    # Adjust the 'stay' probability for each individual
+    m_probs[cbind(1:num_i, stay_col_indices)] <- m_probs[cbind(1:num_i, stay_col_indices)] - delta
+
+    # 3. Sanity check for negative probabilities
+    if (any(m_probs[!is.na(m_probs) & m_probs < 0])) {
+        stop("Progression multiplier resulted in negative probabilities. The multiplier may be too large for the given transition probabilities.")
+    }
+  }
+  
   return(m_probs)
 }
 
@@ -107,15 +146,15 @@ update_probsV_disc <- function(
     v_discontinued,    # Binary vector: 1 if discontinued, 0 otherwise
     m_indi_features,   # For age/sex to calculate mortality
     params_gompertz_sex, # Sex-specific gompertz parameters
-    mort_mult_arm = 1,   # NEW: Mortality multiplier for the arm
-    mort_mult_soc = 1,   # NEW: Mortality multiplier for the SoC/discontinued group
+    prog_mult_arm = 1,   # NEW: Progression multiplier for the arm
+    prog_mult_soc = 1,   # NEW: Progression multiplier for the SoC/discontinued group
     cycle_length = 0.5) {
   
   # 1. Calculate probabilities assuming everyone is on treatment
-  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, treatment_mortality_multiplier = mort_mult_arm)
+  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, progression_multiplier = prog_mult_arm)
   
   # 2. Calculate probabilities assuming everyone is on SoC
-  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, treatment_mortality_multiplier = mort_mult_soc)
+  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, progression_multiplier = prog_mult_soc)
   
   # 3. Combine based on discontinuation status
   # v_discontinued is a vector of length N. We multiply to broadcast across columns.
@@ -284,8 +323,8 @@ run_microSimV_hosp_disc <- function(
     p_disc,             # Probability of discontinuation per cycle
     arm_name,           # NEW: To identify arm ("stabilizer" or "silencer") for waning effect
     params_gompertz_sex,# Sex-specific Gompertz parameters for background mortality
-    mort_mult_arm = 1,  # NEW: Mortality multiplier for the arm
-    mort_mult_soc = 1,  # NEW: Mortality multiplier for the SoC/discontinued group
+    prog_mult_arm = 1,  # NEW: Progression multiplier for the arm
+    prog_mult_soc = 1,  # NEW: Progression multiplier for the SoC/discontinued group
     v_hosp_probs,     
     v_hosp_costs,     
     v_hosp_disutils,  
@@ -374,8 +413,8 @@ run_microSimV_hosp_disc <- function(
       l_trans_probs_soc = l_trans_probs_soc_t, # NEW: Use time-dependent SoC probabilities
       v_discontinued    = v_effective_disc, # Use the effective vector for transitions
       m_indi_features   = m_indi_features,
-      mort_mult_arm     = mort_mult_arm,      # NEW: Pass multiplier
-      mort_mult_soc     = mort_mult_soc,      # NEW: Pass multiplier
+      prog_mult_arm     = prog_mult_arm,      # NEW: Pass multiplier
+      prog_mult_soc     = prog_mult_soc,      # NEW: Pass multiplier
       params_gompertz_sex = params_gompertz_sex,
       cycle_length      = cycle_length
     )
@@ -692,8 +731,8 @@ get_survival_diff <- function(
     p_disc              = arm_params$p_disc,
     arm_name            = arm_params$arm_name,
     params_gompertz_sex = common_params$params_gompertz$male,
-    mort_mult_arm       = multiplier,
-    mort_mult_soc       = multiplier, # Apply same multiplier to discontinued patients
+    prog_mult_arm       = multiplier,
+    prog_mult_soc       = multiplier, # Apply same multiplier to discontinued patients
     v_hosp_probs        = arm_params$v_hosp_probs,
     v_hosp_costs        = common_params$v_hosp_costs,
     v_hosp_disutils     = common_params$v_hosp_disutils,
@@ -752,12 +791,12 @@ si_params_calib <- list(
 cat("Calibrating for Stabilizer arm... Target survival: 0.82\n")
 st_calibration_result <- uniroot(get_survival_diff, interval = c(0.1, 5), target_survival = 0.82, arm_params = st_params_calib, common_params = common_params, tol = 1e-4)
 calibrated_mult_st <- st_calibration_result$root
-cat("-> Calibrated Stabilizer Mortality Multiplier:", calibrated_mult_st, "\n")
+cat("-> Calibrated Stabilizer Progression Multiplier:", calibrated_mult_st, "\n")
 
 cat("Calibrating for Silencer arm... Target survival: 0.82\n")
 si_calibration_result <- uniroot(get_survival_diff, interval = c(0.1, 5), target_survival = 0.82, arm_params = si_params_calib, common_params = common_params, tol = 1e-4)
 calibrated_mult_si <- si_calibration_result$root
-cat("-> Calibrated Silencer Mortality Multiplier:", calibrated_mult_si, "\n")
+cat("-> Calibrated Silencer Progression Multiplier:", calibrated_mult_si, "\n")
 
 ### Running the simulation ###
 
@@ -778,8 +817,8 @@ res_st_male <- run_microSimV_hosp_disc(
   p_disc              = p_disc_st,
   arm_name            = "stabilizer",
   params_gompertz_sex = params_gompertz$male,
-  mort_mult_arm       = calibrated_mult_st, # Use calibrated multiplier
-  mort_mult_soc       = calibrated_mult_st, # Use calibrated multiplier
+  prog_mult_arm       = calibrated_mult_st, # Use calibrated multiplier
+  prog_mult_soc       = calibrated_mult_st, # Use calibrated multiplier
   v_hosp_probs        = v_hosp_probs_st,
   v_hosp_costs        = v_hosp_costs,
   v_hosp_disutils     = v_hosp_disutils,
@@ -804,8 +843,8 @@ res_si_male <- run_microSimV_hosp_disc(
   p_disc              = p_disc_si,
   arm_name            = "silencer",
   params_gompertz_sex = params_gompertz$male,
-  mort_mult_arm       = calibrated_mult_si, # Use calibrated multiplier
-  mort_mult_soc       = calibrated_mult_si, # Use calibrated multiplier
+  prog_mult_arm       = calibrated_mult_si, # Use calibrated multiplier
+  prog_mult_soc       = calibrated_mult_si, # Use calibrated multiplier
   v_hosp_probs        = v_hosp_probs_si,
   v_hosp_costs        = v_hosp_costs,
   v_hosp_disutils     = v_hosp_disutils,
@@ -832,8 +871,8 @@ res_st_female <- run_microSimV_hosp_disc(
   p_disc              = p_disc_st,
   arm_name            = "stabilizer",
   params_gompertz_sex = params_gompertz$female,
-  mort_mult_arm       = calibrated_mult_st, # Use calibrated multiplier
-  mort_mult_soc       = calibrated_mult_st, # Use calibrated multiplier
+  prog_mult_arm       = calibrated_mult_st, # Use calibrated multiplier
+  prog_mult_soc       = calibrated_mult_st, # Use calibrated multiplier
   v_hosp_probs        = v_hosp_probs_st,
   v_hosp_costs        = v_hosp_costs,
   v_hosp_disutils     = v_hosp_disutils,
@@ -858,8 +897,8 @@ res_si_female <- run_microSimV_hosp_disc(
   p_disc              = p_disc_si,
   arm_name            = "silencer",
   params_gompertz_sex = params_gompertz$female,
-  mort_mult_arm       = calibrated_mult_si, # Use calibrated multiplier
-  mort_mult_soc       = calibrated_mult_si, # Use calibrated multiplier
+  prog_mult_arm       = calibrated_mult_si, # Use calibrated multiplier
+  prog_mult_soc       = calibrated_mult_si, # Use calibrated multiplier
   v_hosp_probs        = v_hosp_probs_si,
   v_hosp_costs        = v_hosp_costs,
   v_hosp_disutils     = v_hosp_disutils,
