@@ -11,6 +11,8 @@ library(dplyr)
 library(kableExtra)
 library(survminer)
 
+# to caclulate cumulative hazard every cycle with the continuous age
+
 # 1. Load 2022 Actuarial Life Table & Simulate Cohort -----------------------
 # Load the raw CSV file.
 # We assume it has columns 'Exact.age', 'Male.Death.probability', 'Female.Death.probability'
@@ -126,3 +128,43 @@ params <- list(
 )
 
 print(params)
+
+# 5. Left-truncated Gompertz fit (age >= 60) --------------------------------
+# The whole-life fit above overestimates mortality at ages 70-85 (the ATTR-CM range).
+# Refit by maximum likelihood on the life table, conditional on survival to age 60:
+# each age x contributes d_x deaths in [x, x+1) and l_{x+1} survivors, with
+# h(a) = rate * exp(shape * a), H(x, x+1) = (rate / shape) * (exp(shape * (x + 1)) - exp(shape * x))
+fit_age_min <- 60
+
+fit_gompertz_lt <- function(ages, qx, age_min = fit_age_min) {
+  keep <- ages >= age_min & qx < 1
+  x  <- ages[keep]; q <- qx[keep]
+  lx <- cumprod(c(1, 1 - q))[seq_along(q)] # survivors at start of each age, from age_min
+  dx <- lx * q # ㅔ proportion of individual who die
+  negll <- function(par) {
+    shape <- exp(par[1]); rate <- exp(par[2]) # shape, rate always
+    H <- (rate / shape) * (exp(shape * (x + 1)) - exp(shape * x))
+    p_die <- pmin(pmax(1 - exp(-H), 1e-12), 1 - 1e-12) # with these parameters -> p_die?
+    -sum(dx * log(p_die) + (lx - dx) * log(1 - p_die)) # LIKELIHOOD
+  }
+  opt <- optim(c(log(0.09), log(1e-5)), negll, control = list(maxit = 5000, reltol = 1e-12))# find the optimal params
+  list(shape = exp(opt$par[1]), rate = exp(opt$par[2]))
+}
+
+params_gompertz_lt <- list(
+  male   = fit_gompertz_lt(df_raw_lifetable$Exact.age, df_raw_lifetable$Male.Death.probability),
+  female = fit_gompertz_lt(df_raw_lifetable$Exact.age, df_raw_lifetable$Female.Death.probability)
+)
+print(params_gompertz_lt)
+
+# Check: 3.5-year survival, life table vs left-truncated Gompertz
+surv_gompertz <- function(a, g, t) exp(-(g$rate / g$shape) * (exp(g$shape * (a + t)) - exp(g$shape * a)))
+surv_lifetable <- function(a, qx, t) {
+  l <- approx(df_raw_lifetable$Exact.age, log(cumprod(c(1, 1 - qx))[seq_along(qx)]), xout = c(a, a + t))$y
+  exp(l[2] - l[1])
+}
+for (a in c(65, 71, 75, 77.5, 80, 85, 90)) {
+  cat(sprintf("Age %.1f | Male: LT %.3f Gompertz %.3f | Female: LT %.3f Gompertz %.3f\n", a,
+              surv_lifetable(a, df_raw_lifetable$Male.Death.probability, 3.5),   surv_gompertz(a, params_gompertz_lt$male, 3.5),
+              surv_lifetable(a, df_raw_lifetable$Female.Death.probability, 3.5), surv_gompertz(a, params_gompertz_lt$female, 3.5)))
+}
