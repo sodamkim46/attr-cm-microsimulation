@@ -12,3 +12,6 @@ Rplots.pdf
 # Local output backups and test runs
 OWSA_output_backup_*/
 *_test.csv
+
+# Personal practice scripts
+PRACTICE.r
