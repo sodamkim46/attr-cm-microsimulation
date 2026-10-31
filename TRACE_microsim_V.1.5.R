@@ -240,7 +240,8 @@ run_microSimV_hosp_disc <- function(
     discount_rate_QALYs,
     cycle_length = 0.5,
     starting_seed = 1,
-    waning_years = 1) {  # silencer residual effect after discontinuation (years)
+    waning_years = 1,    # silencer residual effect after discontinuation (years)
+    disc_max_cycle = Inf) { # last cycle in which patients can discontinue (Inf = every cycle)
 
   # Matrices of states, costs, QALYs, life-years, and on-treatment status (individuals x cycles)
   m_States <- m_Costs <- m_Effs <- m_LYs <- m_OnTx <- matrix(
@@ -285,7 +286,7 @@ run_microSimV_hosp_disc <- function(
     u_hosp  <- runif(num_i)
 
     # 1. Discontinuation (alive patients on treatment), at the start of the cycle
-    eligible_to_disc <- (v_discontinued == 0) & (m_States[, t] != "Death") 
+    eligible_to_disc <- (v_discontinued == 0) & (m_States[, t] != "Death") & (t <= disc_max_cycle)
     v_discontinued[eligible_to_disc & (u_disc < p_disc)] <- 1
     v_cycles_since_disc[v_discontinued == 1] <- v_cycles_since_disc[v_discontinued == 1] + 1
 
