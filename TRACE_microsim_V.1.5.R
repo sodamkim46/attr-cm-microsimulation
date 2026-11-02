@@ -18,7 +18,8 @@ get_m_probs <- function(
     v_states_names,
     m_indi_features,
     params_gompertz_sex,
-    theta = 1) { # excess-hazard factor: 1 = full NYHA HRs, 0 = general population mortality
+    theta = 1,       # excess-hazard factor: 1 = full NYHA HRs, 0 = general population mortality
+    v_hr_death = 1) { # individual multiplier on the death hazard (1 = none; used by the eGFR scenario)
 
   num_i <- nrow(m_indi_features)
   m_probs <- matrix(0,
@@ -45,6 +46,7 @@ get_m_probs <- function(
   beta  <- params_gompertz_sex$shape
   if (abs(beta) < 1e-9) {cumulative_hazard_base <- rep(alpha * cycle_length, length(v_age))}
   else {cumulative_hazard_base <- (alpha / beta) * (exp(beta * (v_age + cycle_length)) - exp(beta * v_age))}
+  cumulative_hazard_base <- cumulative_hazard_base * v_hr_death
 
   # 2. State-specific hazards with excess-hazard scaling: HR_k = 1 + theta * (rr_HF * HR_k - 1), theta >= 0. theta: excess-hazard theta
   #    Keeps the NYHA ordering and never puts any state below general population mortality.
@@ -108,10 +110,11 @@ update_probsV_disc <- function(
     params_gompertz_sex, # sex-specific Gompertz parameters
     theta_arm = 1,       # excess-hazard factor, on treatment
     theta_soc = 1,       # excess-hazard factor, discontinued
-    cycle_length = 0.5) {
+    cycle_length = 0.5,
+    v_hr_death = 1) {    # individual multiplier on the death hazard (1 = none)
 
-  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, theta = theta_arm)
-  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, theta = theta_soc)
+  m_probs_arm <- get_m_probs(l_trans_probs_arm, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, theta = theta_arm, v_hr_death = v_hr_death)
+  m_probs_soc <- get_m_probs(l_trans_probs_soc, v_occupied_state, cycle_length, v_states_names, m_indi_features, params_gompertz_sex, theta = theta_soc, v_hr_death = v_hr_death)
   m_probs <- m_probs_arm * (1 - v_discontinued) + m_probs_soc * v_discontinued
 
   if (!all(abs(rowSums(m_probs) - 1) < 1e-8)) {
