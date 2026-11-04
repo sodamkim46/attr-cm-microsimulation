@@ -413,7 +413,9 @@ mean_age    <- 78.0 # median age (Q1-Q3 72.0-83.0)
 sd_age      <- 8.4  # reported SD (mean 76.9 +/- 8.4); N(78, 8.4) gives Q1-Q3 72.3-83.7
 prop_male   <- 0.875
 prop_female <- 1 - prop_male
-set.seed(seed)
+# Population draws use their own stream: with the same seed as the simulation (set.seed(seed) in the engine),
+# the draws that set the starting NYHA class were reused as the transition draws of cycle 2
+set.seed(seed + 1)
 m_indi_features_male   <- cbind("age" = rnorm(n = num_i, mean = mean_age, sd = sd_age))
 m_indi_features_female <- cbind("age" = rnorm(n = num_i, mean = mean_age, sd = sd_age))
 
