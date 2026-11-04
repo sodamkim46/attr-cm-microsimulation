@@ -1,0 +1,8 @@
+"test","value"
+"theta 0, no discontinuation: 10-year survival (male), expected value",0.408355093447762
+"Gompertz general-population survival, same ages",0.407800734330473
+"Equal discontinuation, no residual effect: incremental QALYs (expect 0)",0
+"No discontinuation in either arm: incremental QALYs (expect 0)",0
+"Equal discontinuation, with residual effect: incremental QALYs (expect > 0)",0.0120196827040222
+"Life-years at theta 3 minus base theta (expect < 0)",-3.21866993389887
+"Alive at the end of the horizon (expect about 0)",9.40792627815582e-06

@@ -839,9 +839,10 @@ summarize_arm <- function(res, drug_cycle) {
 } # cyc_undisc: undiscounted life yrs
 
 ### Subgroup analysis ###
-# Subgroup-specific age, sex mix, and starting NYHA distribution; base-case theta kept fixed.
-run_subgroup <- function(label, sg_mean_age, sg_sd_age, sg_prop_male, sg_p_starting) {
-  set.seed(seed)
+# Subgroup-specific age, sex mix, and starting NYHA distribution; base-case theta unless sg_theta is given.
+# Population draws use seed + 1, as in the base case, so that they are not reused as simulation draws.
+run_subgroup <- function(label, sg_mean_age, sg_sd_age, sg_prop_male, sg_p_starting, sg_theta = calibrated_theta) {
+  set.seed(seed + 1)
   m_male   <- cbind("age" = rnorm(n = num_i, mean = sg_mean_age, sd = sg_sd_age))
   m_female <- cbind("age" = rnorm(n = num_i, mean = sg_mean_age, sd = sg_sd_age))
   v_start  <- sample(x = v_states_names, size = num_i, replace = TRUE, prob = sg_p_starting)
@@ -862,8 +863,8 @@ run_subgroup <- function(label, sg_mean_age, sg_sd_age, sg_prop_male, sg_p_start
       p_disc              = if (is_si) p_disc_si else p_disc_st,
       arm_name            = arm,
       params_gompertz_sex = params_gompertz[[sex]],
-      theta_arm           = calibrated_theta,
-      theta_soc           = calibrated_theta,
+      theta_arm           = sg_theta,
+      theta_soc           = sg_theta,
       v_hosp_probs        = if (is_si) v_hosp_probs_si else v_hosp_probs_st,
       v_hosp_costs        = v_hosp_costs,
       v_hosp_disutils     = v_hosp_disutils,

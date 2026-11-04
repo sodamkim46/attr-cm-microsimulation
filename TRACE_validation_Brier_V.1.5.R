@@ -126,14 +126,14 @@ print(df_nyha, row.names = FALSE, digits = 3)
 # Model survival at months 6 to 60, sex-weighted
 si_params_calib <- list(v_states_costs_arm = v_states_costs_si, l_trans_probs_arm = l_trans_probs_si_tv,
                         p_disc = p_disc_si, v_hosp_probs = v_hosp_probs_si, arm_name = "silencer")
-get_cohort_curve <- function(age, sd, male, v_nyha, arm_params) {
+get_cohort_curve <- function(age, sd, male, v_nyha, arm_params, theta_val = calibrated_theta) {
   set.seed(seed + 1)
   com <- common_params
   com$m_indi_features_male   <- cbind(age = rnorm(num_i, age, sd))
   com$m_indi_features_female <- cbind(age = rnorm(num_i, age, sd))
   com$v_starting_states      <- sample(v_states_names, size = num_i, replace = TRUE, prob = c(v_nyha, 0))
   com$prop_male              <- male
-  v_surv <- get_survival_curve(calibrated_theta, 10, arm_params, com)
+  v_surv <- get_survival_curve(theta_val, 10, arm_params, com)
   setNames(v_surv, (1:10) * 6)
 }
 compare_cohort <- function(df_obs, v_curve) {
@@ -262,7 +262,30 @@ df_fit <- rbind(df_fit,
   summarize_fit("Fumagalli, three age strata, months 30 and 42", df_fuma$model, df_fuma$km)
 )
 
-### Block 9. Save the results ###
+### Block 9. How much does the age gradient matter for the hereditary subgroup? ###
+# Sensitivity analysis, not a base case: the hereditary subgroup (mean age 71) is close in age to the Fumagalli <80 stratum (72.3),
+# where the model is above the CI. Fit theta to that stratum at months 30 and 42, then rerun the subgroup with it.
+# That stratum is 80% wild-type, so this tests the effect of younger age, not hereditary disease itself.
+df_fuma_u80 <- df_fuma[grepl("<80", df_fuma$cohort), ]
+v_fuma_u80_se <- (df_fuma_u80$upper - df_fuma_u80$lower) / (2 * 1.96)
+calc_error_u80 <- function(theta_val) {
+  v_model <- get_cohort_curve(72.3, 6.12, 0.902, c(0.182, 0.560, 0.249, 0.009), st_params_calib, theta_val)[as.character(df_fuma_u80$month)]
+  sum(((v_model - df_fuma_u80$km) / v_fuma_u80_se)^2)
+}
+theta_u80 <- optimize(calc_error_u80, interval = c(0.4, 3), tol = 0.002)$minimum
+
+v_hered <- list(71, 8.15, 0.71, c(0.174, 0.44, 0.385, 0, 0))
+df_hered <- rbind(
+  do.call(run_subgroup, c(list("Hereditary, base-case theta"), v_hered)),
+  do.call(run_subgroup, c(list("Hereditary, theta fitted to Fumagalli <80"), v_hered, list(sg_theta = theta_u80)))
+)
+df_hered$theta <- c(calibrated_theta, theta_u80)
+df_hered$inc_Dqalys <- df_hered$Dqalys_si - df_hered$Dqalys_st
+df_hered <- df_hered[, c("subgroup", "theta", "LYs_st", "LYs_si", "Dcosts_st", "Dcosts_si", "inc_Dqalys", "ICER", "list_price_100k", "list_price_150k")]
+cat("\nHereditary subgroup: effect of a higher theta at younger ages\n")
+print(df_hered, row.names = FALSE, digits = 6)
+
+### Block 10. Save the results ###
 dir_val <- "Validation_output"
 dir.create(dir_val, showWarnings = FALSE)
 write.csv(df_masri, file.path(dir_val, "Brier_Masri_V.1.5.csv"), row.names = FALSE)
@@ -271,3 +294,4 @@ write.csv(df_fit,   file.path(dir_val, "Brier_summary_V.1.5.csv"), row.names = F
 write.csv(df_nyha,  file.path(dir_val, "Brier_NYHA_V.1.5.csv"), row.names = FALSE)
 write.csv(df_trials, file.path(dir_val, "External_trials_V.1.5.csv"), row.names = FALSE)
 write.csv(df_realworld, file.path(dir_val, "External_realworld_V.1.5.csv"), row.names = FALSE)
+write.csv(df_hered, file.path(dir_val, "External_hereditary_sensitivity_V.1.5.csv"), row.names = FALSE)
