@@ -408,8 +408,9 @@ discount_rate_costs <- 0.03
 discount_rate_QALYs <- 0.03
 
 ## Population: separate male and female cohorts (sex-specific background mortality), weighted by prop_male
-mean_age    <- 78.0
-sd_age      <- 5
+## Age, sex, starting NYHA, subgroups: US tafamidis-treated cohort, n = 624 (Masri et al., JACC CardioOncol 2025;7(3):282-293, Table 1)
+mean_age    <- 78.0 # median age (Q1-Q3 72.0-83.0)
+sd_age      <- 8.4  # reported SD (mean 76.9 +/- 8.4); N(78, 8.4) gives Q1-Q3 72.3-83.7
 prop_male   <- 0.875
 prop_female <- 1 - prop_male
 set.seed(seed)
@@ -658,7 +659,7 @@ calib_months       <- 42
 calib_cycles       <- calib_months / 12 / cycle_length # 7 cycles
 ref_surv_obs       <- 0.768  # THAOS 42-month survival, tafamidis-treated
 ref_mean_age       <- 77.7   # THAOS median age
-ref_sd_age         <- sd_age # SD not reported; same spread as the model population
+ref_sd_age         <- 6.98   # from THAOS 10th-90th percentile 68.0-85.9, assuming normality
 ref_prop_male      <- 0.918
 
 # Expected (general population) survival over t years from Gompertz, averaged over individuals
@@ -890,8 +891,9 @@ run_subgroup <- function(label, sg_mean_age, sg_sd_age, sg_prop_male, sg_p_start
 
 cat("\n--- SUBGROUP ANALYSIS (Silencer vs Stabilizer) ---\n")
 subgroup_results <- rbind(
-  run_subgroup("Wild-type (wtATTR)", 79, 5, 0.91, c(0.126, 0.536, 0.326, 0.012, 0)),
-  run_subgroup("Hereditary (vATTR)", 71, 5, 0.71, c(0.174, 0.44, 0.385, 0, 0))
+  # Masri et al. 2025, Table 1; SD = (Q3 - Q1) / 1.349 (wild-type Q1-Q3 73.1-84.0, hereditary 65.0-76.0)
+  run_subgroup("Wild-type (wtATTR)", 79, 8.1, 0.91, c(0.126, 0.536, 0.326, 0.012, 0)),
+  run_subgroup("Hereditary (vATTR)", 71, 8.15, 0.71, c(0.174, 0.44, 0.385, 0, 0))
 )
 print(subgroup_results)
 
