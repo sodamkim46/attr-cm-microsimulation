@@ -1,6 +1,6 @@
 # TRACE scenario: eGFR pathway on top of the V1.5 base case (acoramidis vs vutrisiran).
 # Each patient gets an eGFR trajectory; a >20% decline over one year sets a permanent flag that multiplies
-# the death hazard by 1.48 (Ioannou et al. 2025, adjusted HR). The real-world survival used for theta (THAOS)
+# the death hazard by 1.48 (Ioannou et al. 2025, adjusted HR). The real-world survival used for theta (Masri)
 # already includes deaths after eGFR decline, so one offset HR, applied to every patient in both arms like theta,
 # is calibrated so that the acoramidis arm's 42-month survival equals the base case. Arm differences then come
 # only from the eGFR slopes; clinical efficacy (NYHA transitions) stays equal, as in the base case.
@@ -427,8 +427,8 @@ get_egfr_draws <- function(sigma = egfr_sigma, sd_meas = egfr_sd_meas) {
 wsurv <- function(res_m, res_f) prop_male * res_m$v_surv + prop_female * res_f$v_surv
 surv_by_cycle <- function(res) colMeans(res$m_States != "Death")
 
-# Base-case survival by cycle and arm; the target is the stabilizer arm at the theta calibration point
-# (42 months = calib_cycles), the arm theta was calibrated on
+# Base-case survival by cycle and arm; the target is the stabilizer arm at the 42-month anchor point
+# (42 months = calib_cycles), the arm theta is calibrated on
 v_surv_base <- list(
   stabilizer = prop_male * surv_by_cycle(res_st_male) + prop_female * surv_by_cycle(res_st_female),
   silencer   = prop_male * surv_by_cycle(res_si_male) + prop_female * surv_by_cycle(res_si_female)

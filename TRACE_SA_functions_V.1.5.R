@@ -126,12 +126,18 @@ run_owsa_case <- function(inp, pop = NULL) {
   inc_c_nondrug <- inc_c - drug_si * ontx_si
   thr_list <- function(wtp) (wtp * inc_q - inc_c_nondrug) / ontx_si / cycle_length / (1 - inp$c_discount_si)
   c(Dcosts_st = Dcosts_st, Dcosts_si = Dcosts_si, Dqalys_st = Dqalys_st, Dqalys_si = Dqalys_si,
+    LYs_st = wavg(r_st_m$mean_lys, r_st_f$mean_lys), LYs_si = wavg(r_si_m$mean_lys, r_si_f$mean_lys),
     inc_Dcosts = inc_c, inc_Dqalys = inc_q, ICER = inc_c / inc_q,
     list_price_100k = thr_list(100000), list_price_150k = thr_list(150000))
 }
 
-### Re-calibrate theta for a different 42-month survival target (used in the OWSA) ###
+### Re-calibrate theta to a different survival curve (used in the OWSA) ###
 # Same method as the base case calibration
+calibrate_theta_masri <- function(v_km) {
+  optimize(calc_calib_error, interval = c(0, 3), v_km = v_km, tol = 0.002)$minimum
+}
+
+### Calibrate theta to one 42-month survival value, THAOS relative survival (used in the calibration scenarios) ###
 # If the target is at or above general population survival, theta = 0
 calibrate_theta <- function(surv_obs) {
   target <- exp_surv_model * (surv_obs / exp_surv_ref)

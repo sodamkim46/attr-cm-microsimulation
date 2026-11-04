@@ -1,0 +1,4 @@
+"comparison","n_points","brier","rmse_pp","max_abs_diff_pp"
+"Masri, months 6-54 (calibration points)",9,0.000245272848784723,1.56611892519286,2.39537500000001
+"Masri, months 60 and 65 (not fitted)",2,0.00322002795080295,5.67452901199999,6.07235416666667
+"THAOS, months 6-42 (not fitted)",7,0.00699625160828196,8.36435987286652,10.8309130509944

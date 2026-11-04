@@ -32,7 +32,8 @@ owsa_params <- list(
   list("Hospitalization probabilities (±25%)",                  "hosp_prob_mult",    0.75, 1.25),
   list("Hospitalization costs (±25%)",                          "hosp_cost_mult",    0.75, 1.25),
   list("Hospitalization disutilities (±25%)",                   "hosp_disutil_mult", 0.75, 1.25),
-  list("42-month survival target, THAOS 95% CI (0.768; 0.709-0.817)", "surv_target", 0.709, 0.817)
+  # Survival targets: theta re-calibrated to the lower (-1) or upper (+1) 95% CI band of the Masri curve
+  list("Survival calibration target, Masri 95% CI band (lower; upper)", "surv_target", -1, 1)
 )
 
 ### Step 3. Run OWSA ###
@@ -44,8 +45,8 @@ owsa_rows <- lapply(owsa_params, function(p) {
   res <- lapply(c(low = p[[3]], high = p[[4]]), function(val) {
     inp <- base_inputs
     if (p[[2]] == "surv_target") { # survival target: re-calibrate theta
-      inp$theta <- calibrate_theta(val)
-      cat(sprintf("  Survival target %.3f -> theta = %.4f\n", val, inp$theta))
+      inp$theta <- calibrate_theta_masri(if (val < 0) df_calib_masri$lower else df_calib_masri$upper)
+      cat(sprintf("  Survival target %s band -> theta = %.4f\n", if (val < 0) "lower" else "upper", inp$theta))
     } else inp[[p[[2]]]] <- val # all other inputs: just replace the value
     run_owsa_case(inp)
   })

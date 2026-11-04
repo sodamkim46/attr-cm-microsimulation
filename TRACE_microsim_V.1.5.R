@@ -2,7 +2,7 @@
 # in ATTR-CM. Health states: NYHA I-IV and death, 6-month cycles, lifetime horizon, US healthcare sector perspective.
 # Features: time-varying NYHA transitions, treatment discontinuation with a residual effect for the silencer,
 # cardiovascular hospitalization events, age/sex-specific Gompertz background mortality, and an excess-hazard
-# factor (theta) calibrated to real-world survival (THAOS). Outputs: costs, QALYs, life-years, ICER,
+# factor (theta) calibrated to real-world survival (Masri 2025 Kaplan-Meier curve). Outputs: costs, QALYs, life-years, ICER,
 # threshold price, subgroups, and a cost breakdown.
 
 rm(list = ls())
@@ -576,19 +576,18 @@ v_hosp_costs    <- c("NYHA1" = 30584.15689, "NYHA2" = 17400.10754, "NYHA3" = 176
 v_hosp_disutils <- c("NYHA1" = 0.023, "NYHA2" = 0.01, "NYHA3" = 0.027, "NYHA4" = 0.07, "Death" = 0)
 
 ### Mortality calibration (excess-hazard factor theta) ###
-# Target: THAOS tafamidis-treated registry cohort (Garcia-Pavia et al., J Card Fail 2025;31(3):525-533):
-# n = 587, median age 77.7, 91.8% male, 91.8% wild-type; survival 84.4% at 30 months, 76.8% at 42 months.
-# Relative survival transport: registry survival / registry expected (general population) survival = relative survival; 
-# target = model-population expected survival x relative survival. theta is calibrated on the
-# stabilizer arm (registry patients were tafamidis-treated) and applied to both arms.
+# Target: Kaplan-Meier survival of the cohort that defines the model population: Masri et al., JACC CardioOncol
+# 2025;7(3):282-293, Figure 1 (n = 624; 5 US centers; time zero = tafamidis start), months 6-54.
+# theta minimizes the weighted sum of squared errors (weight = 1 / SE^2) on the stabilizer arm (the cohort was
+# tafamidis-treated) and is applied to both arms. Months 60 and 65 are not fitted (78 and 7 patients at risk).
+# The THAOS relative-survival target (Garcia-Pavia et al., J Card Fail 2025;31(3):525-533) is kept as a scenario.
 
-cat("\n--- Calibrating theta to 42-month survival ---\n")
+cat("\n--- Calibrating theta to the Masri survival curve ---\n")
 
-# Sex-weighted model survival at calib_cycles minus the target (root found with uniroot)
-get_survival_diff <- function(
-    theta_val,
-    target_survival,
-    calib_cycles,
+# Sex-weighted model survival at cycles 1 to n_cycles
+get_survival_curve <- function(
+    theta_val,     # one value, or one value per cycle
+    n_cycles,
     arm_params,    # arm-specific inputs
     common_params  # inputs shared by both arms
 ) {
@@ -597,7 +596,7 @@ get_survival_diff <- function(
     sim_results <- run_microSimV_hosp_disc(
       v_starting_states   = common_params$v_starting_states,
       num_i               = common_params$num_i,
-      num_cycles          = calib_cycles,
+      num_cycles          = n_cycles,
       m_indi_features     = m_features,
       v_states_names      = common_params$v_states_names,
       v_states_costs_arm  = arm_params$v_states_costs_arm,
@@ -618,14 +617,17 @@ get_survival_diff <- function(
       cycle_length        = common_params$cycle_length,
       starting_seed       = common_params$seed
     )
-    sum(sim_results$m_States[, calib_cycles + 1] != "Death") / common_params$num_i
+    colMeans(sim_results$m_States != "Death")[-1] # drop cycle 0
   }
 
   surv_male   <- run_sex(common_params$m_indi_features_male,   common_params$params_gompertz$male)
   surv_female <- run_sex(common_params$m_indi_features_female, common_params$params_gompertz$female)
-  survival_at_target <- surv_male * common_params$prop_male + surv_female * (1 - common_params$prop_male)
+  surv_male * common_params$prop_male + surv_female * (1 - common_params$prop_male)
+}
 
-  return(survival_at_target - target_survival)
+# Sex-weighted model survival at calib_cycles minus the target (THAOS scenario: root found with uniroot)
+get_survival_diff <- function(theta_val, target_survival, calib_cycles, arm_params, common_params) {
+  get_survival_curve(theta_val, calib_cycles, arm_params, common_params)[calib_cycles] - target_survival
 }
 
 common_params <- list(
@@ -655,6 +657,33 @@ st_params_calib <- list(
   arm_name            = "stabilizer"
 )
 
+# Masri survival read from the figure at each 6-month tick (TRACE_validation_Brier_V.1.5.R has the check against the paper)
+df_calib_masri <- data.frame(
+  month = seq(6, 54, by = 6),
+  km    = c(0.9491, 0.8911, 0.8312, 0.7682, 0.7253, 0.6803, 0.6503, 0.6224, 0.5794),
+  lower = c(0.9301, 0.8661, 0.8022, 0.7343, 0.6903, 0.6444, 0.6124, 0.5844, 0.5385),
+  upper = c(0.9640, 0.9121, 0.8601, 0.7982, 0.7582, 0.7143, 0.6863, 0.6603, 0.6224)
+)
+df_calib_masri$se <- (df_calib_masri$upper - df_calib_masri$lower) / (2 * 1.96) # SE from the 95% CI band
+stopifnot(all(df_calib_masri$month == seq_len(nrow(df_calib_masri)) * cycle_length * 12)) # one point per cycle
+
+# Weighted sum of squared errors between model survival and a survival curve
+calc_calib_error <- function(theta_val, v_km) {
+  v_model <- get_survival_curve(theta_val, nrow(df_calib_masri), st_params_calib, common_params)
+  sum(((v_model - v_km) / df_calib_masri$se)^2)
+}
+
+theta_calibration_result <- optimize(calc_calib_error, interval = c(0, 3), v_km = df_calib_masri$km, tol = 0.002)
+calibrated_theta <- theta_calibration_result$minimum
+df_calib_masri$model <- get_survival_curve(calibrated_theta, nrow(df_calib_masri), st_params_calib, common_params)
+cat("-> Calibrated theta (applied to both arms):", calibrated_theta, "| weighted squared error:", theta_calibration_result$objective, "\n")
+cat("-> Calibrated HRs vs general population (NYHA1-4):", round(1 + calibrated_theta * (rr_HF * c(1, rr_2v1, rr_3v1, rr_4v1) - 1), 3), "\n")
+print(round(df_calib_masri[, c("month", "km", "lower", "upper", "model")], 4), row.names = FALSE)
+
+### THAOS scenario inputs, and the 42-month point used as the anchor of the eGFR scenario ###
+# Relative survival transport: registry survival / registry expected (general population) survival = relative survival;
+# target = model-population expected survival x relative survival.
+# THAOS: n = 587, median age 77.7, 91.8% male, 91.8% wild-type; survival 84.4% at 30 months, 76.8% at 42 months.
 calib_months       <- 42
 calib_cycles       <- calib_months / 12 / cycle_length # 7 cycles
 ref_surv_obs       <- 0.768  # THAOS 42-month survival, tafamidis-treated
@@ -679,16 +708,7 @@ exp_surv_model <- prop_male * calc_expected_surv(m_indi_features_male[, "age"], 
 rel_surv_ref      <- ref_surv_obs / exp_surv_ref # relative survival: THAOS survival / expected survival with THAOS cohort
 target_surv_calib <- exp_surv_model * rel_surv_ref # calibration target (age, sex adjusted): expected survival with our model cohort * relative survival
 
-cat("Registry expected (general population) survival at", calib_months, "months:", round(exp_surv_ref, 4), "\n")
-cat("Registry relative survival:", round(rel_surv_ref, 4), "\n")
-cat("Model population expected (general population) survival:", round(exp_surv_model, 4), "\n")
-cat("Target", calib_months, "-month survival (stabilizer arm, sex-weighted):", target_surv_calib, "\n")
-# theta = 0 gives general population survival, so the root lies in [0, 3] whenever relative survival <= 1
-# to find the exact theta, make the different between the simulated survival and the terget 0.
-theta_calibration_result <- uniroot(get_survival_diff, interval = c(0, 3), target_survival = target_surv_calib, calib_cycles = calib_cycles, arm_params = st_params_calib, common_params = common_params, tol = 1e-4)
-calibrated_theta <- theta_calibration_result$root
-cat("-> Calibrated theta (applied to both arms):", calibrated_theta, "\n")
-cat("-> Calibrated HRs vs general population (NYHA1-4):", round(1 + calibrated_theta * (rr_HF * c(1, rr_2v1, rr_3v1, rr_4v1) - 1), 3), "\n")
+cat("THAOS scenario: 42-month target for the model population:", round(target_surv_calib, 4), "(relative survival", round(rel_surv_ref, 4), ")\n")
 
 ### Base case: run both arms for each sex (same seed in every run: common random numbers) ###
 
