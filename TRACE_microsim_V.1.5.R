@@ -234,8 +234,8 @@ run_microSimV_hosp_disc <- function(
     p_disc,              # discontinuation probability per cycle
     arm_name,            # "stabilizer" or "silencer" (the silencer keeps a residual effect after discontinuation)
     params_gompertz_sex, # sex-specific Gompertz parameters for background mortality
-    theta_arm = 1,       # excess-hazard factor, on treatment
-    theta_soc = 1,       # excess-hazard factor, discontinued
+    theta_arm = 1,       # excess-hazard factor, on treatment (one value, or one value per cycle)
+    theta_soc = 1,       # excess-hazard factor, discontinued (one value, or one value per cycle)
     v_hosp_probs,
     v_hosp_costs,
     v_hosp_disutils,
@@ -311,8 +311,8 @@ run_microSimV_hosp_disc <- function(
       l_trans_probs_soc   = l_trans_probs_soc_t,
       v_discontinued      = v_effective_disc,
       m_indi_features     = m_indi_features,
-      theta_arm           = theta_arm,
-      theta_soc           = theta_soc,
+      theta_arm           = theta_arm[min(t, length(theta_arm))], # one value, or one value per cycle
+      theta_soc           = theta_soc[min(t, length(theta_soc))],
       params_gompertz_sex = params_gompertz_sex,
       cycle_length        = cycle_length
     )
