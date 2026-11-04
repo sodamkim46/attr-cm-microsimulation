@@ -78,13 +78,16 @@ init_egfr <- function(l_draws, beta_arm, dip = 0, dip_arm = FALSE) {
   v_egfr     <- l_draws$E0 - dip * dip_arm
   v_ref_true <- if (dip_arm) v_egfr + (beta_arm + l_draws$u) * egfr_dip_day / 365 else l_draws$E0
   list(egfr = v_egfr, ref = v_ref_true + l_draws$e[, 1], flag = rep(0, length(v_egfr)),
-       e = l_draws$e, k = 1) # k = tests done so far
+       e = l_draws$e, k = 1, # k = tests done so far
+       cap = l_draws$E0)     # baseline before any dip: upper limit when cap_rise = TRUE
 }
 
-# Advance true eGFR by one cycle along each patient's current slope (floored at 0); at the end of each year,
-# test (true + measurement error), flag a >20% fall since the last test (permanent), and keep this test as the new reference
-update_egfr <- function(l_egfr, t, v_slope, cycle_length) {
+# Advance true eGFR by one cycle along each patient's current slope (floored at 0; with cap_rise, also no rise above
+# baseline); at the end of each year, test (true + measurement error), flag a >20% fall since the last test
+# (permanent), and keep this test as the new reference
+update_egfr <- function(l_egfr, t, v_slope, cycle_length, cap_rise = FALSE) {
   l_egfr$egfr <- pmax(l_egfr$egfr + v_slope * cycle_length, 0)
+  if (cap_rise) l_egfr$egfr <- pmin(l_egfr$egfr, l_egfr$cap)
   if ((t * cycle_length) %% 1 == 0) {
     l_egfr$k <- l_egfr$k + 1
     v_measured <- l_egfr$egfr + l_egfr$e[, l_egfr$k]
@@ -95,13 +98,14 @@ update_egfr <- function(l_egfr, t, v_slope, cycle_length) {
 }
 
 # Check: cumulative % flagged by year when everyone stays alive and on treatment (eGFR process only)
-flag_by_year <- function(beta_arm, dip = 0, dip_arm = FALSE, years = 10, sigma = egfr_sigma, sd_meas = egfr_sd_meas) {
+flag_by_year <- function(beta_arm, dip = 0, dip_arm = FALSE, years = 10, sigma = egfr_sigma, sd_meas = egfr_sd_meas,
+                         cap_rise = FALSE) {
   l_draws <- draw_egfr_patients(num_i, sigma, sd_meas)
   l_egfr  <- init_egfr(l_draws, beta_arm, dip, dip_arm)
   v_slope <- beta_arm + l_draws$u
   v_out   <- numeric(years)
   for (t in 1:(years / cycle_length)) {
-    l_egfr <- update_egfr(l_egfr, t, v_slope, cycle_length)
+    l_egfr <- update_egfr(l_egfr, t, v_slope, cycle_length, cap_rise)
     if ((t * cycle_length) %% 1 == 0) v_out[t * cycle_length] <- mean(l_egfr$flag)
   }
   v_out
@@ -113,11 +117,22 @@ df_flag <- data.frame(
   vutrisiran            = flag_by_year(egfr_beta_vutrisiran),
   acoramidis            = flag_by_year(egfr_beta_acoramidis, dip = egfr_dip, dip_arm = TRUE),
   acoramidis_dip8.5     = flag_by_year(egfr_beta_acoramidis, dip = 8.5,      dip_arm = TRUE),
-  placebo_no_meas_error = flag_by_year(egfr_beta_placebo, sd_meas = 0)
+  placebo_no_meas_error = flag_by_year(egfr_beta_placebo, sd_meas = 0),
+  placebo_no_rise       = flag_by_year(egfr_beta_placebo, cap_rise = TRUE),
+  vutrisiran_no_rise    = flag_by_year(egfr_beta_vutrisiran, cap_rise = TRUE),
+  acoramidis_no_rise    = flag_by_year(egfr_beta_acoramidis, dip = egfr_dip, dip_arm = TRUE, cap_rise = TRUE)
 )
 cat("\n--- Cumulative % with eGFR decline flag (no death, no discontinuation) ---\n")
 print(cbind(year = df_flag$year, round(100 * df_flag[, -1], 1)))
 write.csv(df_flag, file.path(dir_out_egfr, "eGFR_flag_by_year.csv"), row.names = FALSE)
+
+# Normal slopes give some patients a rising eGFR for life (implausible at these ages). Capping eGFR at baseline
+# (sensitivity analysis) removes them but makes every arm's mean slope steeper than in the trials:
+u_chk <- draw_egfr_patients(num_i)$u
+cat("Share with a rising eGFR (placebo / vutrisiran / acoramidis):",
+    round(100 * sapply(c(egfr_beta_placebo, egfr_beta_vutrisiran, egfr_beta_acoramidis), function(b) mean(b + u_chk > 0)), 1),
+    "%\nMean slope with eGFR capped at baseline:",
+    round(sapply(c(egfr_beta_placebo, egfr_beta_vutrisiran, egfr_beta_acoramidis), function(b) mean(pmin(b + u_chk, 0))), 2), "\n")
 
 # Check against Ioannou et al. 2025 (measured 1-year change: median -5, IQR -12 to 1; 24.0% with >20% decline).
 # The cohort's mean change was about -5/year, so the check uses beta = -5 rather than the placebo slope.
@@ -184,7 +199,8 @@ run_microSimV_egfr <- function(
     beta_soc = egfr_beta_placebo, # chronic eGFR slope after discontinuation
     dip = 0,                 # acute dip (acoramidis)
     hr_offset = 1,           # offset for decline deaths already in the real-world survival (calibrated; all patients)
-    hr_decline = hr_egfr_decline) {
+    hr_decline = hr_egfr_decline,
+    cap_rise = FALSE) {      # TRUE = eGFR cannot rise above baseline (sensitivity analysis)
 
   m_States <- m_Costs <- m_Effs <- m_LYs <- m_OnTx <- m_Flag <- matrix(
     nrow = num_i,
@@ -282,7 +298,7 @@ run_microSimV_egfr <- function(
       l_egfr$egfr[v_recover] <- l_egfr$egfr[v_recover] + v_dip_left[v_recover]
       v_dip_left[v_recover] <- 0
       v_slope <- ifelse(v_effective_disc == 0, beta_arm, beta_soc) + l_egfr_draws$u
-      l_egfr  <- update_egfr(l_egfr, t, v_slope, cycle_length)
+      l_egfr  <- update_egfr(l_egfr, t, v_slope, cycle_length, cap_rise)
     }
 
     # 7. Entering NYHA4 ends treatment
@@ -524,11 +540,12 @@ ggsave(file.path(dir_out_egfr, "eGFR_scenario_survival.png"), p_surv_egfr, width
 ### Block 6. Sensitivity analyses (offset HR recalibrated in every case) ###
 
 run_egfr_case <- function(label, sigma = egfr_sigma, sd_meas = egfr_sd_meas, beta_vu = egfr_beta_vutrisiran,
-                          dip = egfr_dip, hr_decline = hr_egfr_decline) {
+                          dip = egfr_dip, hr_decline = hr_egfr_decline, cap_rise = FALSE) {
   l_draws <- get_egfr_draws(sigma, sd_meas)
-  hr_off  <- calibrate_hr_offset(dip, l_draws, hr_decline = hr_decline)
-  l_ac <- run_egfr_both("stabilizer", egfr_beta_acoramidis, dip, hr_off, l_draws, costs_arm = v_states_costs_ac, hr_decline = hr_decline)
-  l_vu <- run_egfr_both("silencer",   beta_vu,              0,   hr_off, l_draws, hr_decline = hr_decline)
+  hr_off  <- calibrate_hr_offset(dip, l_draws, hr_decline = hr_decline, cap_rise = cap_rise)
+  l_ac <- run_egfr_both("stabilizer", egfr_beta_acoramidis, dip, hr_off, l_draws, costs_arm = v_states_costs_ac,
+                        hr_decline = hr_decline, cap_rise = cap_rise)
+  l_vu <- run_egfr_both("silencer",   beta_vu,              0,   hr_off, l_draws, hr_decline = hr_decline, cap_rise = cap_rise)
   cat("done:", label, "| offset HR", round(hr_off, 4), "\n")
   cbind(summarize_step(label, l_ac, l_vu), hr_offset = hr_off)
 }
@@ -544,7 +561,8 @@ df_sa_egfr <- rbind(
   run_egfr_case("vutrisiran slope -3.48 (placebo)", beta_vu = egfr_beta_placebo),
   run_egfr_case("vutrisiran slope -1.01 (= acoramidis)", beta_vu = egfr_beta_acoramidis),
   run_egfr_case("acoramidis dip 8.5",               dip = 8.5),
-  run_egfr_case("decline HR 1.71 (unadjusted)",     hr_decline = 1.71)
+  run_egfr_case("decline HR 1.71 (unadjusted)",     hr_decline = 1.71),
+  run_egfr_case("no eGFR rise above baseline",      cap_rise = TRUE)
 )
 # eGFR pathway effect = change from (ii), where clinical efficacy and prices are the same
 df_sa_egfr$d_inc_qaly_vs_ii <- df_sa_egfr$inc_qaly - df_sa_egfr$inc_qaly[1]
