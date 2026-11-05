@@ -193,6 +193,7 @@ run_microSimV_egfr <- function(
     starting_seed = 1,
     waning_years = 1,
     disc_max_cycle = Inf,
+    l_future = NULL,         # future medical costs for this sex, as in the V1.5 engine
     egfr_on = TRUE,          # FALSE = V1.5 engine
     l_egfr_draws,            # draw_egfr_patients(num_i, ...)
     beta_arm,                # chronic eGFR slope on treatment
@@ -229,6 +230,7 @@ run_microSimV_egfr <- function(
     v_states_utilities = v_states_utilities,
     cycle_length       = cycle_length
   )
+  if (!is.null(l_future)) m_Costs[, 1] <- m_Costs[, 1] + calc_future_costsV(m_States[, 1], NULL, m_indi_features[, "age"], l_future, cycle_length)
   m_LYs[, 1]  <- (m_States[, 1] != "Death") * cycle_length
   m_OnTx[, 1] <- (m_States[, 1] != "Death") * (1 - v_discontinued)
   m_Flag[, 1] <- l_egfr$flag
@@ -322,6 +324,7 @@ run_microSimV_egfr <- function(
     m_LYs[, t + 1]  <- (m_States[, t + 1] != "Death") * cycle_length
     m_OnTx[, t + 1] <- (m_States[, t + 1] != "Death") * (1 - v_discontinued)
     m_Flag[, t + 1] <- l_egfr$flag
+    if (!is.null(l_future)) m_Costs[, t + 1] <- m_Costs[, t + 1] + calc_future_costsV(m_States[, t + 1], m_States[, t], m_indi_features[, "age"], l_future, cycle_length)
   }
 
   # Totals with the same half-cycle correction and discounting as V1.5
@@ -388,6 +391,7 @@ run_egfr_arm <- function(m_features, sex, arm, n_cycles = num_cycles, costs_arm 
     discount_rate_QALYs = discount_rate_QALYs,
     cycle_length        = cycle_length,
     starting_seed       = seed,
+    l_future            = l_future_costs[[sex]],
     ...
   )
 }

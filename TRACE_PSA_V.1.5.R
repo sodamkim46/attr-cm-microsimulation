@@ -7,8 +7,9 @@
 #                             one for the on-treatment matrix and one for the matrix after discontinuation
 #   Stabilizer WAC discount   PERT(20%, 27.5%, 40%)
 #   Silencer price            Uniform(ASP, ASP + 6%)
-# Fixed at base case (same as ICER): mortality HRs, theta, hospitalization probabilities, discontinuation,
-# population, discount rate
+#   Discontinuation per cycle PERT(min, base case, max) with the OWSA ranges, independent by arm: stabilizer 0.96%, 1.93%, 4.65%;
+#                             silencer 0.25%, 0.51%, 6.51%. The ranges span trials and real-world data, so the means are above the base case
+# Fixed at base case: mortality HRs, theta, hospitalization rates, future medical costs, population, discount rate
 
 # Step 1. Run the base case model and load the SA helper functions
 source("TRACE_microsim_V.1.5.R")
@@ -76,7 +77,9 @@ psa_params <- data.frame(
   c_hosp4        = gamma_cv(n_sim, c_hosp_base[4], cv_cost[4]),
   trans_mult_tx  = rnorm(n_sim, 1, 0.1), 
   # as transition counts were not available, same approach as the ICER model. X capture the uncertainty in each individual transition or the correlation
-  trans_mult_soc = rnorm(n_sim, 1, 0.1)
+  trans_mult_soc = rnorm(n_sim, 1, 0.1),
+  p_disc_cycle_st = rpert(n_sim, p_disc_st / 2, p_disc_st, 1 - (1 - 0.212)^(1/5)), # high: ATTR-ACT
+  p_disc_cycle_si = rpert(n_sim, p_disc_si / 2, p_disc_si, 1 - (1 - 0.126)^0.5)    # high: Komodo 12-month, net of restarts
 )
 
 # Put one row of sampled values into the input list
@@ -90,6 +93,8 @@ psa_inputs <- function(par) {
   inp$c_hosp         <- c(par$c_hosp1, par$c_hosp2, par$c_hosp3, par$c_hosp4)
   inp$trans_mult_tx  <- par$trans_mult_tx # maintain the equal efficacy assumption
   inp$trans_mult_soc <- par$trans_mult_soc
+  inp$p_disc_cycle_st <- par$p_disc_cycle_st
+  inp$p_disc_cycle_si <- par$p_disc_cycle_si
   inp
 }
 

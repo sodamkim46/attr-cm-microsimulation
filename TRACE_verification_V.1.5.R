@@ -30,10 +30,13 @@ run_trace <- function(age, sd, v_nyha, sex, arm, theta_on = calibrated_theta, th
   v_u <- v_states_utilities[1:4]; v_c <- v_states_costs_soc[1:4]
   v_ph <- v_hosp_probs_st[1:4]; v_ch <- v_hosp_costs[1:4]; v_dh <- v_hosp_disutils[1:4]
   v_ly <- v_q <- v_cost <- v_ontx <- v_hosp <- numeric(n_cycles + 1)
+  l_fut <- l_future_costs[[sex]]
+  calc_unrelated <- function(v_a) approx(l_fut$v_age, l_fut$v_unrelated, xout = v_a, rule = 2)$y * cycle_length
+  v_alive <- rep(1, n_grid) # by age in the grid
   v_surv <- numeric(n_cycles)
   occ <- get_occ()
   v_ly[1] <- sum(occ) * cycle_length; v_q[1] <- sum(occ * v_u) * cycle_length
-  v_ontx[1] <- mean(rowSums(m_on)); v_cost[1] <- sum(occ * v_c) + c_drug * v_ontx[1]
+  v_ontx[1] <- mean(rowSums(m_on)); v_cost[1] <- sum(occ * v_c) + c_drug * v_ontx[1] + mean(v_alive * calc_unrelated(v_age0))
 
   for (t in 1:n_cycles) {
     k <- min(t, 5)
@@ -64,7 +67,12 @@ run_trace <- function(age, sd, v_nyha, sex, arm, theta_on = calibrated_theta, th
     v_q[t + 1] <- sum(occ * v_u) * cycle_length - sum(occ * v_ph * v_dh)
     v_ontx[t + 1] <- mean(rowSums(m_on))
     v_hosp[t + 1] <- sum(occ * v_ph)
-    v_cost[t + 1] <- sum(occ * v_c) + c_drug * v_ontx[t + 1] + sum(occ * v_ph * v_ch)
+    v_alive_new <- rowSums(m_on + m_c1 + m_c2 + m_off) + v_n4
+    v_age_end <- v_age + cycle_length
+    v_future <- mean(v_alive_new * calc_unrelated(v_age_end)) +
+      mean((v_alive - v_alive_new) * (l_fut$v_death[1] + l_fut$v_death[2] * pmin(v_age_end, max(l_fut$v_age))))
+    v_alive <- v_alive_new
+    v_cost[t + 1] <- sum(occ * v_c) + c_drug * v_ontx[t + 1] + sum(occ * v_ph * v_ch) + v_future
   }
   v_w <- calc_discount_wts(discount_rate_costs, n_cycles, cycle_length)
   lt <- function(v, w) sum((v[-(n_cycles + 1)] * w[-(n_cycles + 1)] + v[-1] * w[-1]) / 2)
@@ -133,7 +141,7 @@ run_seed <- function(s) {
       p_disc = if (is_si) p_disc_si else p_disc_st, arm_name = arm, params_gompertz_sex = params_gompertz[[sex]],
       theta_arm = calibrated_theta, theta_soc = calibrated_theta, v_hosp_probs = v_hosp_probs_st, v_hosp_costs = v_hosp_costs,
       v_hosp_disutils = v_hosp_disutils, discount_rate_costs = discount_rate_costs, discount_rate_QALYs = discount_rate_QALYs,
-      cycle_length = cycle_length, starting_seed = s
+      cycle_length = cycle_length, starting_seed = s, l_future = l_future_costs[[sex]]
     )[c("mean_Dcosts", "mean_Dqalys", "mean_lys")]
   }
   st_m <- run_one(m_m, "male", "stabilizer"); si_m <- run_one(m_m, "male", "silencer")

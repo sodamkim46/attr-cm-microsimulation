@@ -2,7 +2,8 @@
 # in ATTR-CM. Health states: NYHA I-IV and death, 6-month cycles, lifetime horizon, US healthcare sector perspective.
 # Features: time-varying NYHA transitions, treatment discontinuation with a residual effect for the silencer,
 # cardiovascular hospitalization events, age/sex-specific Gompertz background mortality, and an excess-hazard
-# factor (theta) calibrated to real-world survival (Masri 2025 Kaplan-Meier curve). Outputs: costs, QALYs, life-years, ICER,
+# factor (theta) calibrated to real-world survival (Masri 2025 Kaplan-Meier curve), and future medical costs (unrelated care
+# while alive and the cost attributable to death). Outputs: costs, QALYs, life-years, ICER,
 # threshold price, subgroups, and a cost breakdown.
 
 rm(list = ls())
@@ -191,10 +192,11 @@ calc_effsV <- function(
   return(QALYs)
 }
 
-# Cardiovascular hospitalization: at most one Bernoulli event per cycle, with a cost and a one-time disutility
+# Cardiovascular hospitalization: at most one event per cycle, with a cost and a one-time disutility.
+# The inputs are 6-month rates below 1, so the expected number of events per cycle equals the rate, as in the ICER model
 hospV <- function(
     v_occupied_state,
-    v_hosp_probs,    # hospitalization probability per cycle, by state
+    v_hosp_probs,    # hospitalization rate per cycle, by state, used as the probability of one event
     v_hosp_costs,    # cost per hospitalization, by state
     v_hosp_disutils, # QALY decrement per hospitalization, by state
     v_rand_values = runif(length(v_occupied_state))) { # uniforms supplied by the caller (common random numbers)
@@ -209,6 +211,19 @@ hospV <- function(
   v_d[is.na(v_d)] <- 0
 
   return(list(hosp_ind = v_hosp_ind, costs = v_c, disutils = v_d))
+}
+
+# Future medical costs per individual for one cycle: unrelated care while alive, by age and sex, and a one-time cost at death.
+# v_state_prev = NULL at cycle 0, when nobody can die
+calc_future_costsV <- function(v_state, v_state_prev, v_age, l_future, cycle_length) {
+  v_c <- rep(0, length(v_state))
+  is_alive <- v_state != "Death"
+  if (any(is_alive)) v_c[is_alive] <- approx(l_future$v_age, l_future$v_unrelated, xout = v_age[is_alive], rule = 2)$y * cycle_length
+  if (!is.null(v_state_prev)) {
+    is_new_death <- !is_alive & v_state_prev != "Death"
+    v_c[is_new_death] <- l_future$v_death[1] + l_future$v_death[2] * pmin(v_age[is_new_death], max(l_future$v_age))
+  }
+  return(v_c)
 }
 
 # Discount weights for cycles 0..num_cycles
@@ -244,7 +259,8 @@ run_microSimV_hosp_disc <- function(
     cycle_length = 0.5,
     starting_seed = 1,
     waning_years = 1,    # silencer residual effect after discontinuation (years)
-    disc_max_cycle = Inf) { # last cycle in which patients can discontinue (Inf = every cycle)
+    disc_max_cycle = Inf, # last cycle in which patients can discontinue (Inf = every cycle)
+    l_future = NULL) {    # future medical costs for this sex (NULL = none, as in the ICER model)
 
   # Matrices of states, costs, QALYs, life-years, and on-treatment status (individuals x cycles)
   m_States <- m_Costs <- m_Effs <- m_LYs <- m_OnTx <- matrix(
@@ -274,6 +290,12 @@ run_microSimV_hosp_disc <- function(
   )
   m_LYs[, 1]  <- (m_States[, 1] != "Death") * cycle_length
   m_OnTx[, 1] <- (m_States[, 1] != "Death") * (1 - v_discontinued) # who incurs drug costs
+  v_mean_future <- numeric(num_cycles + 1) # mean future medical cost by cycle, for the cost breakdown
+  if (!is.null(l_future)) {
+    v_future <- calc_future_costsV(m_States[, 1], NULL, m_indi_features[, "age"], l_future, cycle_length)
+    m_Costs[, 1] <- m_Costs[, 1] + v_future
+    v_mean_future[1] <- mean(v_future)
+  }
 
   for (t in 1:num_cycles) {
 
@@ -293,11 +315,12 @@ run_microSimV_hosp_disc <- function(
     v_discontinued[eligible_to_disc & (u_disc < p_disc)] <- 1
     v_cycles_since_disc[v_discontinued == 1] <- v_cycles_since_disc[v_discontinued == 1] + 1
 
-    # Residual effect: discontinued silencer patients keep on-treatment transitions for waning_years
+    # Residual effect: discontinued silencer patients keep on-treatment transitions for waning_years.
+    # Not in NYHA4: entering NYHA4 ends treatment in both arms, without a residual effect
     v_effective_disc <- v_discontinued #decouple the economic discontinuation from the clinical discontinuation 
     if (arm_name == "silencer") {
       waning_period_cycles <- waning_years / cycle_length
-      indices_in_waning <- which(v_discontinued == 1 & v_cycles_since_disc <= waning_period_cycles)
+      indices_in_waning <- which(v_discontinued == 1 & v_cycles_since_disc <= waning_period_cycles & m_States[, t] != "NYHA4")
       if (length(indices_in_waning) > 0) {
         v_effective_disc[indices_in_waning] <- 0
       }
@@ -353,6 +376,11 @@ run_microSimV_hosp_disc <- function(
     ) - l_hosp_results$disutils
     m_LYs[, t + 1]  <- (m_States[, t + 1] != "Death") * cycle_length #logical coercion. TRUE = 1, FALSE = 0 when multiplied by cycle_length
     m_OnTx[, t + 1] <- (m_States[, t + 1] != "Death") * (1 - v_discontinued)
+    if (!is.null(l_future)) {
+      v_future <- calc_future_costsV(m_States[, t + 1], m_States[, t], m_indi_features[, "age"], l_future, cycle_length)
+      m_Costs[, t + 1] <- m_Costs[, t + 1] + v_future
+      v_mean_future[t + 1] <- mean(v_future)
+    }
   }
 
   # Totals with life-table (half-cycle) correction: average of consecutive cycles, (M[, -last] + M[, -1]) / 2
@@ -371,6 +399,8 @@ run_microSimV_hosp_disc <- function(
   v_total_Dlys   <- lt_sum(t(t(m_LYs)   * v_e_dsc_wts))
   # Discounted on-treatment cycles: discounted drug cost = per-cycle drug cost x mean_DOnTx
   mean_DOnTx <- mean(lt_sum(t(t(m_OnTx) * v_c_dsc_wts))) # we don't need individual OnTx
+  v_future_dsc <- v_mean_future * v_c_dsc_wts
+  mean_Dfuture <- sum((v_future_dsc[-(num_cycles + 1)] + v_future_dsc[-1]) / 2) # discounted future medical costs
 
   results <- list(
     m_States       = m_States,
@@ -389,7 +419,8 @@ run_microSimV_hosp_disc <- function(
     mean_Dcosts    = mean(v_total_Dcosts),
     mean_Dqalys    = mean(v_total_Dqalys),
     mean_Dlys      = mean(v_total_Dlys),
-    mean_DOnTx     = mean_DOnTx
+    mean_DOnTx     = mean_DOnTx,
+    mean_Dfuture   = mean_Dfuture
   )
 
   return(results)
@@ -569,13 +600,27 @@ u_NYHA4   <- 0.333
 u_Death   <- 0
 v_states_utilities <- c("NYHA1" = u_NYHA1, "NYHA2" = u_NYHA2, "NYHA3" = u_NYHA3, "NYHA4" = u_NYHA4, "Death" = u_Death)
 
-## Cardiovascular hospitalization (ICER 2024): probability per cycle by NYHA class (ATTR-ACT pooled across arms;
-## HAS 2020), same in both arms, so treatment affects hospitalization only through NYHA class.
+## Cardiovascular hospitalization (ICER 2024 Table E2.3): 6-month rate by NYHA class (ATTR-ACT pooled across arms, Poisson model;
+## HAS 2020 Table 21, scenario 5B), same in both arms, so treatment affects hospitalization only through NYHA class.
 ## Cost per admission inflated as above; disutility per admission (Griffiths et al. 2017).
 v_hosp_probs_st <- c("NYHA1" = 0.1683, "NYHA2" = 0.3107, "NYHA3" = 0.698, "NYHA4" = 0.8627, "Death" = 0)
 v_hosp_probs_si <- v_hosp_probs_st
 v_hosp_costs    <- c("NYHA1" = 30584.15689, "NYHA2" = 17400.10754, "NYHA3" = 17694.56047, "NYHA4" = 21041.54226, "Death" = 0) * infl_factor
 v_hosp_disutils <- c("NYHA1" = 0.023, "NYHA2" = 0.01, "NYHA3" = 0.027, "NYHA4" = 0.07, "Death" = 0)
+
+## Future medical costs (Second Panel: Sanders et al., JAMA 2016), following Jiao & Basu, Value Health 2021;24(7):957-965, MEPS, 2019 USD.
+## Unrelated: annual cost among survivors in the general population (Figure 1, read from its vector paths; values at 85 as printed; the last
+## value applies from age 85). Their Equation 5 subtracts related cost x disease prevalence; ATTR-CM prevalence is very low, so this is ignored.
+## Death: cost attributable to death = value at birth + change per year of age (Results, Analysis II); age capped at 85, the end of the curve.
+## 2019 index from the ICER Excel model (Cost Adjustments sheet), same BEA series as above
+infl_2019 <- 124.229 / 103.663
+v_age_future <- seq(40, 85, by = 5)
+l_future_costs <- list(
+  male   = list(v_age = v_age_future, v_death = c(33370, -181) * infl_2019,
+                v_unrelated = c(4034, 4768, 5636, 6750, 8029, 9374, 10711, 12043, 13371, 14675) * infl_2019),
+  female = list(v_age = v_age_future, v_death = c(61727, -534) * infl_2019,
+                v_unrelated = c(5476, 6216, 6962, 7894, 8908, 9945, 10989, 12020, 13007, 13979) * infl_2019)
+)
 
 ### Mortality calibration (excess-hazard factor theta) ###
 # Target: Kaplan-Meier survival of the cohort that defines the model population: Masri et al., JACC CardioOncol
@@ -591,7 +636,8 @@ get_survival_curve <- function(
     theta_val,     # one value, or one value per cycle
     n_cycles,
     arm_params,    # arm-specific inputs
-    common_params  # inputs shared by both arms
+    common_params, # inputs shared by both arms
+    theta_off_val = theta_val # theta after discontinuation (same as on treatment in the base case)
 ) {
 
   run_sex <- function(m_features, gompertz_sex) {
@@ -610,7 +656,7 @@ get_survival_curve <- function(
       arm_name            = arm_params$arm_name,
       params_gompertz_sex = gompertz_sex,
       theta_arm           = theta_val,
-      theta_soc           = theta_val,
+      theta_soc           = theta_off_val,
       v_hosp_probs        = arm_params$v_hosp_probs,
       v_hosp_costs        = common_params$v_hosp_costs,
       v_hosp_disutils     = common_params$v_hosp_disutils,
@@ -738,7 +784,8 @@ run_arm_base <- function(m_features, sex, arm) {
     discount_rate_costs = discount_rate_costs,
     discount_rate_QALYs = discount_rate_QALYs,
     cycle_length        = cycle_length,
-    starting_seed       = seed
+    starting_seed       = seed,
+    l_future            = l_future_costs[[sex]]
   )
 }
 
@@ -834,8 +881,9 @@ summarize_arm <- function(res, drug_cycle) {
   cyc   <- calc_state_cycles(res)
   drug  <- drug_cycle * res$mean_DOnTx #price * mean on-treatment cycles
   state <- sum(v_states_costs_soc[v_nyha] * cyc) # SOC prices * time spent in each state
+  future <- res$mean_Dfuture
   c(cyc, cyc_undisc = sum(calc_state_cycles(res, rep(1, num_cycles + 1))), ontx = res$mean_DOnTx,
-    drug = drug, state = state, hosp = res$mean_Dcosts - drug - state, total = res$mean_Dcosts)
+    drug = drug, state = state, hosp = res$mean_Dcosts - drug - state - future, future = future, total = res$mean_Dcosts)
 } # cyc_undisc: undiscounted life yrs
 
 ### Subgroup analysis ###
@@ -871,8 +919,9 @@ run_subgroup <- function(label, sg_mean_age, sg_sd_age, sg_prop_male, sg_p_start
       discount_rate_costs = discount_rate_costs,
       discount_rate_QALYs = discount_rate_QALYs,
       cycle_length        = cycle_length,
-      starting_seed       = seed # used a fixed global seed -> random number generator resets to the identical state each time 
-                                 #-> synchronizing their stocahstic events and minimizaing model variance
+      starting_seed       = seed, # used a fixed global seed -> random number generator resets to the identical state each time 
+                                  #-> synchronizing their stocahstic events and minimizaing model variance
+      l_future            = l_future_costs[[sex]]
     )
   }
 
@@ -905,7 +954,7 @@ run_subgroup <- function(label, sg_mean_age, sg_sd_age, sg_prop_male, sg_p_start
   # Cost breakdown (sex-weighted with the subgroup's sex mix)
   b_st <- summarize_arm(r_st_m, c_drug_st_cycle) * w[1] + summarize_arm(r_st_f, c_drug_st_cycle) * w[2]
   b_si <- summarize_arm(r_si_m, c_drug_si_cycle) * w[1] + summarize_arm(r_si_f, c_drug_si_cycle) * w[2]
-  for (k in c("drug", "state", "hosp")) {
+  for (k in c("drug", "state", "hosp", "future")) {
     out[[paste0(k, "_st")]] <- b_st[[k]]
     out[[paste0(k, "_si")]] <- b_si[[k]]
   }
@@ -953,9 +1002,9 @@ arm_si <- wavg_vec(summarize_arm(res_si_male, c_drug_si_cycle), summarize_arm(re
 
 inc_total <- arm_si["total"] - arm_st["total"]
 cost_breakdown <- data.frame(
-  component  = c("Drug", "Health-state (supportive care)", "Hospitalization", "Non-intervention subtotal", "Total"),
-  stabilizer = c(arm_st["drug"], arm_st["state"], arm_st["hosp"], arm_st["state"] + arm_st["hosp"], arm_st["total"]),
-  silencer   = c(arm_si["drug"], arm_si["state"], arm_si["hosp"], arm_si["state"] + arm_si["hosp"], arm_si["total"]),
+  component  = c("Drug", "Health-state (supportive care)", "Hospitalization", "Future medical (unrelated + death)", "Non-intervention subtotal", "Total"),
+  stabilizer = c(arm_st["drug"], arm_st["state"], arm_st["hosp"], arm_st["future"], arm_st["state"] + arm_st["hosp"] + arm_st["future"], arm_st["total"]),
+  silencer   = c(arm_si["drug"], arm_si["state"], arm_si["hosp"], arm_si["future"], arm_si["state"] + arm_si["hosp"] + arm_si["future"], arm_si["total"]),
   row.names = NULL)
 cost_breakdown$incremental   <- cost_breakdown$silencer - cost_breakdown$stabilizer
 cost_breakdown$pct_of_inc    <- cost_breakdown$incremental / inc_total # where the cost difference is coming from
@@ -980,6 +1029,7 @@ cost_decomposition <- data.frame( # pharmacy cost = drug price * ontx % * life y
                 "Non-intervention: NYHA mix (time in better classes)",
                 "Non-intervention: survival (care during added life)",
                 "Non-intervention: hospitalization residual (realized vs expected)",
+                "Future medical costs (unrelated care and cost at death)",
                 "Total incremental cost"),
   value = c((c_drug_si_cycle - c_drug_st_cycle) * phi_st * L_st, # same L, ontx, but attributed to price
             c_drug_si_cycle * (phi_si - phi_st) * L_st, # same price, L, but attributed to ontx
@@ -987,11 +1037,12 @@ cost_decomposition <- data.frame( # pharmacy cost = drug price * ontx % * life y
             sum(c_bar * (pi_si - pi_st)) * L_st, # same L, attributed to different proportion of NYHA (thanks to better health)
             sum(c_bar * pi_si) * (L_si - L_st), # same NYHA proportion, but attributed to L (punishment for extended life) - medical cost penalty
             ni_residual,
+            arm_si["future"] - arm_st["future"],
             inc_total),
   row.names = NULL)
 cost_decomposition$pct_of_inc <- cost_decomposition$value / inc_total
-stopifnot(abs(sum(cost_decomposition$value[1:6]) - inc_total) < 1e-6 * abs(inc_total))
-life_ext_cost <- sum(cost_decomposition$value[c(3, 5)])
+stopifnot(abs(sum(cost_decomposition$value[1:7]) - inc_total) < 1e-6 * abs(inc_total))
+life_ext_cost <- sum(cost_decomposition$value[c(3, 5, 7)])
 
 cat("\n--- COST BREAKDOWN (discounted, per patient; base case) ---\n")
 print(cost_breakdown, digits = 6, row.names = FALSE)
@@ -1013,13 +1064,13 @@ write.csv(cost_decomposition, file.path(dir_out, "Cost_decomposition_V.1.5.csv")
 write.csv(arm_detail,         file.path(dir_out, "Time_in_state_V.1.5.csv"), row.names = FALSE)
 
 ### Drug vs non-intervention costs: base case and subgroups ###
-make_breakdown <- function(label, drug, state, hosp) { # each argument: c(stabilizer, silencer)
-  nonint <- state + hosp
+make_breakdown <- function(label, drug, state, hosp, future) { # each argument: c(stabilizer, silencer)
+  nonint <- state + hosp + future
   total  <- drug + nonint
   out <- data.frame(population = label,
-                    component  = c("Drug", "Health-state (supportive care)", "Hospitalization", "Non-intervention subtotal", "Total"),
-                    stabilizer = c(drug[1], state[1], hosp[1], nonint[1], total[1]),
-                    silencer   = c(drug[2], state[2], hosp[2], nonint[2], total[2]))
+                    component  = c("Drug", "Health-state (supportive care)", "Hospitalization", "Future medical (unrelated + death)", "Non-intervention subtotal", "Total"),
+                    stabilizer = c(drug[1], state[1], hosp[1], future[1], nonint[1], total[1]),
+                    silencer   = c(drug[2], state[2], hosp[2], future[2], nonint[2], total[2]))
   out$incremental   <- out$silencer - out$stabilizer
   out$pct_of_arm_st <- out$stabilizer / total[1]
   out$pct_of_arm_si <- out$silencer / total[2]
@@ -1027,10 +1078,10 @@ make_breakdown <- function(label, drug, state, hosp) { # each argument: c(stabil
 }
 cost_breakdown_pop <- rbind(
   make_breakdown("Base case", c(arm_st[["drug"]], arm_si[["drug"]]),
-                 c(arm_st[["state"]], arm_si[["state"]]), c(arm_st[["hosp"]], arm_si[["hosp"]])),
+                 c(arm_st[["state"]], arm_si[["state"]]), c(arm_st[["hosp"]], arm_si[["hosp"]]), c(arm_st[["future"]], arm_si[["future"]])),
   do.call(rbind, lapply(seq_len(nrow(subgroup_results)), function(i) {
     sg <- subgroup_results[i, ]
-    make_breakdown(sg$subgroup, c(sg$drug_st, sg$drug_si), c(sg$state_st, sg$state_si), c(sg$hosp_st, sg$hosp_si))
+    make_breakdown(sg$subgroup, c(sg$drug_st, sg$drug_si), c(sg$state_st, sg$state_si), c(sg$hosp_st, sg$hosp_si), c(sg$future_st, sg$future_si))
   }))
 )
 # Check: totals equal the discounted costs from the model

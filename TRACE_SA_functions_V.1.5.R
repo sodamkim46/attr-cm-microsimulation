@@ -18,10 +18,12 @@ base_inputs <- list(
   u_NYHA4           = u_NYHA4,
   state_cost_mult   = 1,
   hosp_prob_mult    = 1,
-  hosp_rate_mult    = 1, # scales the rate, not the probability: p' = 1 - (1 - p)^mult
+  hosp_rate_mult    = 1, # multiplies the 6-month hospitalization rate (scenario: ratio of annual rates between trials)
   hosp_cost_mult    = 1,
   hosp_disutil_mult = 1,
+  future_cost_mult  = 1, # multiplies future medical costs (0 = none, as in the ICER model)
   theta             = calibrated_theta,
+  theta_off         = NULL, # theta after discontinuation; if NULL, same as theta
   p_disc_cycle_st   = NULL, # per-cycle (6-month) discontinuation; if set, used instead of the trial probability above
   p_disc_cycle_si   = NULL,
   # PSA only: values by NYHA class (I-IV); if set, used instead of the multipliers above
@@ -71,13 +73,19 @@ run_owsa_case <- function(inp, pop = NULL) {
 
   # 3. Utilities and hospitalization inputs
   v_utils_case <- c("NYHA1" = inp$u_NYHA1, "NYHA2" = inp$u_NYHA2, "NYHA3" = inp$u_NYHA3, "NYHA4" = inp$u_NYHA4, "Death" = 0)
-  v_hosp_probs_case    <- pmin((1 - (1 - v_hosp_probs_si)^inp$hosp_rate_mult) * inp$hosp_prob_mult, 1) # same in both arms
+  v_hosp_probs_case    <- pmin(v_hosp_probs_si * inp$hosp_rate_mult * inp$hosp_prob_mult, 1) # same in both arms
   v_hosp_costs_case    <- if (is.null(inp$c_hosp)) v_hosp_costs * inp$hosp_cost_mult else setNames(c(inp$c_hosp, 0), v_states_names)
   v_hosp_disutils_case <- if (is.null(inp$u_hosp)) v_hosp_disutils * inp$hosp_disutil_mult else setNames(c(inp$u_hosp, 0), v_states_names)
 
   # 4. Transition probabilities
   l_tx_case  <- scale_trans_probs(l_trans_probs_st_tv,  inp$trans_mult_tx) # silencer = stabilizer (equal efficacy)
   l_soc_case <- scale_trans_probs(l_trans_probs_soc_tv, inp$trans_mult_soc)
+
+  l_future_case <- lapply(l_future_costs, function(l) {
+    l$v_unrelated <- l$v_unrelated * inp$future_cost_mult
+    l$v_death <- l$v_death * inp$future_cost_mult
+    l
+  })
 
   # 5. Run the model (same function and seed as the base case)
   run_arm <- function(m_features, sex, arm) {
@@ -97,7 +105,7 @@ run_owsa_case <- function(inp, pop = NULL) {
       arm_name            = arm,
       params_gompertz_sex = params_gompertz[[sex]],
       theta_arm           = inp$theta,
-      theta_soc           = inp$theta,
+      theta_soc           = if (is.null(inp$theta_off)) inp$theta else inp$theta_off,
       v_hosp_probs        = v_hosp_probs_case,
       v_hosp_costs        = v_hosp_costs_case,
       v_hosp_disutils     = v_hosp_disutils_case,
@@ -105,7 +113,8 @@ run_owsa_case <- function(inp, pop = NULL) {
       discount_rate_QALYs = inp$discount_rate,
       cycle_length        = cycle_length,
       starting_seed       = seed,
-      waning_years        = inp$waning_years
+      waning_years        = inp$waning_years,
+      l_future            = l_future_case[[sex]]
     )
   }
 

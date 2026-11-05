@@ -29,9 +29,10 @@ owsa_params <- list(
   list("Utility NYHA III (0.633; ±10%)",                        "u_NYHA3",        u_NYHA3 * 0.9, u_NYHA3 * 1.1),
   list("Utility NYHA IV (0.333; ±10%)",                         "u_NYHA4",        u_NYHA4 * 0.9, u_NYHA4 * 1.1),
   list("Health state costs (±25%)",                             "state_cost_mult",   0.75, 1.25),
-  list("Hospitalization probabilities (±25%)",                  "hosp_prob_mult",    0.75, 1.25),
+  list("Hospitalization rates (±25%)",                  "hosp_prob_mult",    0.75, 1.25),
   list("Hospitalization costs (±25%)",                          "hosp_cost_mult",    0.75, 1.25),
   list("Hospitalization disutilities (±25%)",                   "hosp_disutil_mult", 0.75, 1.25),
+  list("Future medical costs (none; +25%)",                     "future_cost_mult",  0,    1.25),
   # Survival targets: theta re-calibrated to the lower (-1) or upper (+1) 95% CI band of the Masri curve
   list("Survival calibration target, Masri 95% CI band (lower; upper)", "surv_target", -1, 1)
 )

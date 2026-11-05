@@ -2,8 +2,8 @@
 # Base case: CV hospitalization probabilities by NYHA class from ATTR-ACT (ICER 2024 Table E2.3; HAS 2020),
 # same in both arms
 # ATTRibute-CM (enrolled 2019+) had lower CV hospitalization rates than ATTR-ACT (2013-2018)
-# No trial reports rates by NYHA class, so all NYHA-specific rates are scaled by the ratio of overall annual rates (k):
-#   p' = 1 - (1 - p)^k
+# No trial reports rates by NYHA class, so all NYHA-specific 6-month rates are scaled by the ratio of overall annual rates (k):
+#   rate' = k x rate
 # Everything else stays at base case (incl. theta)
 
 # Step 1. Run the base case model and load the SA helper functions
