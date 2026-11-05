@@ -2,14 +2,14 @@
 # Distributions follow the ICER 2024 ATTR-CM model (Inputs sheet of the ICER Excel model), except drug prices
 #   Utilities                 Beta, SE 0.02 / 0.01 / 0.01 / 0.06 (NYHA I-IV)
 #   Hospital disutilities     Beta, SE = 10% of the mean
-#   State and hospital costs  Gamma, ICER SEs (CV 16.3% / 11.0% / 13.2% / 29.8% for NYHA I-IV)
+#   State and hospital costs  Gamma, CVs of the ICER SEs (16.3% / 11.0% / 13.2% / 29.8% for NYHA I-IV), applied to the base case means
 #   Transitions               Normal(1, 0.1) multiplier on moves between NYHA classes (staying = 1 - sum),
 #                             one for the on-treatment matrix and one for the matrix after discontinuation
 #   Stabilizer WAC discount   PERT(20%, 27.5%, 40%)
 #   Silencer price            Uniform(ASP, ASP + 6%)
 #   Discontinuation per cycle PERT(min, base case, max) with the OWSA ranges, independent by arm: stabilizer 0.96%, 1.93%, 4.65%;
 #                             silencer 0.25%, 0.51%, 6.51%. The ranges span trials and real-world data, so the means are above the base case
-# Fixed at base case: mortality HRs, theta, hospitalization rates, future medical costs, population, discount rate
+# Fixed at base case: mortality HRs, theta, hospitalization rates, population, discount rate
 
 # Step 1. Run the base case model and load the SA helper functions
 source("TRACE_microsim_V.1.5.R")

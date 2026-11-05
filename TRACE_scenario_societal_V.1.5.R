@@ -1,6 +1,6 @@
-# Scenario analysis: societal perspective, and the base case without future medical costs (Silencer vs Stabilizer, base case and subgroups)
+# Scenario analysis: societal perspective (Silencer vs Stabilizer, base case and subgroups)
 # Productivity and caregiver costs depend on NYHA class and age, so they are added after each run from the simulated states.
-# Clinical outcomes and QALYs do not change. All are in addition to the base case costs, which include future medical costs.
+# Clinical outcomes and QALYs do not change. All are in addition to the base case costs.
 # Societal A: ICER 2024 values as used in its Excel model, patient productivity at all ages + caregiver time.
 #   Patient = share not working + overall work impairment, both applied to every patient, x salary x 2021-2024 factor.
 # Societal B: patient productivity only below age 65 + caregiver time at all ages.
@@ -60,7 +60,7 @@ run_population <- function(label, age, sd, male, v_start_probs) {
       discount_rate_costs = discount_rate_costs, discount_rate_QALYs = discount_rate_QALYs, cycle_length = cycle_length,
       starting_seed = seed, l_future = l_future_costs[[sex]]
     )
-    out <- c(Dcosts = res$mean_Dcosts, Dqalys = res$mean_Dqalys, DOnTx = res$mean_DOnTx, future = res$mean_Dfuture,
+    out <- c(Dcosts = res$mean_Dcosts, Dqalys = res$mean_Dqalys, DOnTx = res$mean_DOnTx,
              societal_A = calc_addon(res, m_features[, "age"], "societal_A"), societal_B = calc_addon(res, m_features[, "age"], "societal_B"))
     rm(res); invisible(gc())
     out
@@ -77,13 +77,12 @@ run_population <- function(label, age, sd, male, v_start_probs) {
     data.frame(population = label, case = case, added_cost_st = add_st, added_cost_si = add_si, inc_Dcosts = inc_c,
                inc_Dqalys = inc_q, ICER = inc_c / inc_q, list_price_100k = thr(1e5), list_price_150k = thr(1.5e5), row.names = NULL)
   }
-  rbind(make_row("Base case: healthcare sector, with future medical costs", 0, 0),
-        make_row("Healthcare sector, without future medical costs (as ICER)", -st["future"], -si["future"]),
+  rbind(make_row("Base case: healthcare sector", 0, 0),
         make_row("Societal A: ICER productivity values", st["societal_A"], si["societal_A"]),
         make_row("Societal B: productivity below 65 + caregiver", st["societal_B"], si["societal_B"]))
 }
 
-cat("\n--- SCENARIO: Societal perspective and future medical costs ---\n")
+cat("\n--- SCENARIO: Societal perspective ---\n")
 societal_results <- rbind(
   run_population("Base case", mean_age, sd_age, prop_male, p_starting),
   run_population("Wild-type", 79, 8.1, 0.91, c(0.126, 0.536, 0.326, 0.012, 0)),

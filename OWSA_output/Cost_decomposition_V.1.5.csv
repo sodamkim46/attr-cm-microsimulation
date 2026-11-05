@@ -1,9 +1,9 @@
 "component","value","pct_of_inc"
-"Drug: price difference (at stabilizer time on treatment)",1115027.7785154,0.835705438587073
-"Drug: persistence (larger share of life on treatment)",200361.08779522,0.150169219079572
-"Drug: survival (treatment during added life)",20276.4617058486,0.0151970647273396
-"Non-intervention: NYHA mix (time in better classes)",-4091.69479219663,-0.00306669632520721
-"Non-intervention: survival (care during added life)",1818.23561515588,0.00136275474162772
-"Non-intervention: hospitalization residual (realized vs expected)",-17.0771789955324,-1.2799224949618e-05
-"Future medical costs (unrelated care and cost at death)",860.606401087352,0.000645018414544922
-"Total incremental cost",1334235.39806152,1
+"Drug: price difference (at stabilizer time on treatment)",1115027.7785154,0.836705451217057
+"Drug: persistence (larger share of life on treatment)",200361.08779522,0.150348912915199
+"Drug: survival (treatment during added life)",20276.4617058486,0.0152152496714172
+"Non-intervention: NYHA mix (time in better classes)",-7295.84245283749,-0.00547472562489676
+"Non-intervention: survival (care during added life)",4288.33979442815,0.00321792636184043
+"Non-intervention: hospitalization residual (realized vs expected)",-17.0771789952996,-1.28145406169173e-05
+"Future medical costs (unrelated care and cost at death)",0,0
+"Total incremental cost",1332640.74817906,1

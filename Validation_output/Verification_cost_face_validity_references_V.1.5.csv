@@ -1,0 +1,14 @@
+"source","measure","reported","q2_2026"
+"Grodin 2026, Optum, ATTR-CM","Admissions per person-year: all patients, 11,255 / 4,571 / 2.9 y",0.849055892093332,0.849055892093332
+"Grodin 2026, Optum, ATTR-CM","Admissions per person-year: patients with >=1 admission, 3.3 / 2.9 y",1.13793103448276,1.13793103448276
+"Grodin 2026, Optum, ATTR-CM","Cost per admission, inpatient",32960,35045.6010133863
+"Grodin 2026, Optum, ATTR-CM","Cost per admission, inpatient + outpatient + ancillary",35983,38259.8865674963
+"Grodin 2026, Optum, ATTR-CM","Annual hospitalization cost, inpatient (reported; denominator appears to be patients with >=1 admission)",42868,45580.5468519977
+"Grodin 2026, Optum, ATTR-CM","Annual hospitalization cost, inpatient x 75.5% hospitalized (all patients, approximate)",32365.34,34413.3128732582
+"Grodin 2026, Optum, ATTR-CM","Annual hospitalization cost, admissions per person-year x inpatient cost per admission (all patients, approximate)",27984.8822033962,29755.6740323677
+"Grodin 2026, Optum, ATTR-CM","Medication cost per year, pharmacy claims (8.8% on disease-modifying therapy)",18340,19500.4952240748
+"Grodin 2026, Optum, ATTR-CM","Medication cost per year, matched non-amyloid heart failure cohort",6930,7368.50773734123
+"Shoji 2026, GWTG-HF + Medicare, ATTR-CM, year after HF hospitalization","Total Part A + B, 1 year",60373,64193.2060067103
+"Shoji 2026, GWTG-HF + Medicare, ATTR-CM, year after HF hospitalization","Inpatient",35109,37330.5827056729
+"Shoji 2026, GWTG-HF + Medicare, ATTR-CM, year after HF hospitalization","Skilled nursing facility",4398,4676.29105755075
+"Shoji 2026, GWTG-HF + Medicare, ATTR-CM, year after HF hospitalization","Outpatient (Part B, no Part D)",20866,22186.3322434866

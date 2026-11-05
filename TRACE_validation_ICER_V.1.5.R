@@ -108,7 +108,7 @@ icer_v_states_names <- c("NYHA1", "NYHA2", "NYHA3", "NYHA4", "Death") # state na
 icer_prop_male  <- 1 - get_in("female")
 icer_m_features <- cbind("age" = rep(get_in("age"), icer_num_i))
 icer_p_start    <- c(get_in("start_I"), get_in("start_II"), get_in("start_III"), get_in("start_IV"), 0)
-set.seed(icer_seed)
+set.seed(icer_seed + 1) # not the simulation seed, so the starting-state draws are not reused as simulation draws
 icer_v_start <- sample(x = icer_v_states_names, size = icer_num_i, replace = TRUE, prob = icer_p_start)
 
 ## Mortality

@@ -14,7 +14,7 @@ dir.create(dir_val, showWarnings = FALSE)
 get_P <- function(l) t(sapply(1:4, function(i) unlist(l[paste0("p_", i, "to", 1:4)])))
 
 run_trace <- function(age, sd, v_nyha, sex, arm, theta_on = calibrated_theta, theta_off = theta_on, p_disc_arm = NULL,
-                      n_cycles = num_cycles, residual = TRUE, n_grid = 2000) {
+                      n_cycles = num_cycles, residual = TRUE, n_grid = 2000, v_c = v_states_costs_soc[1:4], use_future = FALSE) {
   is_si <- arm == "silencer"
   if (is.null(p_disc_arm)) p_disc_arm <- if (is_si) p_disc_si else p_disc_st
   c_drug <- if (is_si) c_si * (1 - c_discount_si) else c_st * (1 - c_discount_st)
@@ -27,14 +27,15 @@ run_trace <- function(age, sd, v_nyha, sex, arm, theta_on = calibrated_theta, th
   v_n4 <- rep(v_nyha[4], n_grid)
   get_occ <- function() c(colMeans(m_on + m_c1 + m_c2 + m_off), mean(v_n4))
 
-  v_u <- v_states_utilities[1:4]; v_c <- v_states_costs_soc[1:4]
+  v_u <- v_states_utilities[1:4]
   v_ph <- v_hosp_probs_st[1:4]; v_ch <- v_hosp_costs[1:4]; v_dh <- v_hosp_disutils[1:4]
   v_ly <- v_q <- v_cost <- v_ontx <- v_hosp <- numeric(n_cycles + 1)
-  l_fut <- l_future_costs[[sex]]
-  calc_unrelated <- function(v_a) approx(l_fut$v_age, l_fut$v_unrelated, xout = v_a, rule = 2)$y * cycle_length
+  l_fut <- l_future_jiao[[sex]]
+  calc_unrelated <- function(v_a) if (use_future) approx(l_fut$v_age, l_fut$v_unrelated, xout = v_a, rule = 2)$y * cycle_length else 0
   v_alive <- rep(1, n_grid) # by age in the grid
   v_surv <- numeric(n_cycles)
   occ <- get_occ()
+  m_occ <- matrix(0, n_cycles + 1, 4); m_occ[1, ] <- occ
   v_ly[1] <- sum(occ) * cycle_length; v_q[1] <- sum(occ * v_u) * cycle_length
   v_ontx[1] <- mean(rowSums(m_on)); v_cost[1] <- sum(occ * v_c) + c_drug * v_ontx[1] + mean(v_alive * calc_unrelated(v_age0))
 
@@ -62,6 +63,7 @@ run_trace <- function(age, sd, v_nyha, sex, arm, theta_on = calibrated_theta, th
     m_on <- r_on[, 1:3]; m_c1 <- r_c1[, 1:3]; m_c2 <- r_c2[, 1:3]; m_off <- r_off[, 1:3]
     # Payoffs at the end of the cycle
     occ <- get_occ()
+    m_occ[t + 1, ] <- occ
     v_surv[t] <- sum(occ)
     v_ly[t + 1] <- sum(occ) * cycle_length
     v_q[t + 1] <- sum(occ * v_u) * cycle_length - sum(occ * v_ph * v_dh)
@@ -69,15 +71,15 @@ run_trace <- function(age, sd, v_nyha, sex, arm, theta_on = calibrated_theta, th
     v_hosp[t + 1] <- sum(occ * v_ph)
     v_alive_new <- rowSums(m_on + m_c1 + m_c2 + m_off) + v_n4
     v_age_end <- v_age + cycle_length
-    v_future <- mean(v_alive_new * calc_unrelated(v_age_end)) +
-      mean((v_alive - v_alive_new) * (l_fut$v_death[1] + l_fut$v_death[2] * pmin(v_age_end, max(l_fut$v_age))))
+    v_future <- mean(v_alive_new * calc_unrelated(v_age_end))
+    if (use_future) v_future <- v_future + mean((v_alive - v_alive_new) * (l_fut$v_death[1] + l_fut$v_death[2] * pmin(v_age_end, max(l_fut$v_age))))
     v_alive <- v_alive_new
     v_cost[t + 1] <- sum(occ * v_c) + c_drug * v_ontx[t + 1] + sum(occ * v_ph * v_ch) + v_future
   }
   v_w <- calc_discount_wts(discount_rate_costs, n_cycles, cycle_length)
   lt <- function(v, w) sum((v[-(n_cycles + 1)] * w[-(n_cycles + 1)] + v[-1] * w[-1]) / 2)
   list(Dcosts = lt(v_cost, v_w), Dqalys = lt(v_q, v_w), LYs = lt(v_ly, rep(1, n_cycles + 1)), DOnTx = lt(v_ontx, v_w),
-       surv = v_surv, hosp = v_hosp, ly_by_cycle = v_ly)
+       surv = v_surv, hosp = v_hosp, ly_by_cycle = v_ly, occ_by_cycle = m_occ)
 }
 
 # Sex-weighted
@@ -101,7 +103,8 @@ v_nyha_hered <- c(0.174, 0.44, 0.385, 0) / 0.999 # sample() rescales these to su
 df_compare <- rbind(
   summarize_trace("Base case, expected value", mean_age, sd_age, prop_male, v_nyha_base),
   summarize_trace("Wild-type, expected value", 79, 8.1, 0.91, v_nyha_wt),
-  summarize_trace("Hereditary, expected value", 71, 8.15, 0.71, v_nyha_hered)
+  summarize_trace("Hereditary, expected value", 71, 8.15, 0.71, v_nyha_hered),
+  summarize_trace("Base case, ICER values + future medical costs, expected value", mean_age, sd_age, prop_male, v_nyha_base, v_c = v_costs_icer, use_future = TRUE)
 )
 cat("\nExpected-value model (compare with the engine summary above)\n")
 print(df_compare, row.names = FALSE, digits = 6)
@@ -164,6 +167,33 @@ calc_rate <- function(n) sum(tr_st$hosp[2:(n + 1)]) / sum((tr_st$ly_by_cycle[1:n
 df_hosp <- data.frame(period = c("Months 0-30", "Lifetime"), events_per_person_year = c(calc_rate(5), calc_rate(num_cycles)))
 print(df_hosp, row.names = FALSE, digits = 3)
 
+# Non-drug costs per person-year alive, Q2 2026 USD, against US ATTR-CM cohorts (reported in 2024 USD; both all-cause)
+v_wang_visits <- c(709 + 17075 + 4995, 2166 + 27915 + 10349, 2647 + 21834 + 15950, 4249 + 24965 + 33385) * infl_2022
+v_wang_pharm  <- c(3765, 5789, 10158, 18103) * infl_2022
+v_ph <- v_hosp_probs_st[1:4]; v_ch <- v_hosp_costs[1:4]
+calc_costs_py <- function(n) {
+  occ <- tr_st$occ_by_cycle
+  v_py <- colSums((occ[1:n, , drop = FALSE] + occ[2:(n + 1), , drop = FALSE]) / 2) * cycle_length # person-years by NYHA class
+  v_ev <- colSums(occ[2:(n + 1), , drop = FALSE]) * v_ph # admissions by NYHA class
+  c(hosp_per_py = sum(v_ev) / sum(v_py), cost_per_admission = sum(v_ev * v_ch) / sum(v_ev), hosp_cost_py = sum(v_ev * v_ch) / sum(v_py),
+    visits_py = sum(v_py * v_wang_visits) / sum(v_py), pharmacy_py = sum(v_py * v_wang_pharm) / sum(v_py),
+    health_state_py = sum(v_py * v_c_st) / sum(v_py) / cycle_length, health_state_icer_py = sum(v_py * v_costs_icer) / sum(v_py) / cycle_length)
+}
+v_c_st <- v_states_costs_soc[1:4]
+df_cost_model <- data.frame(period = c("Months 0-12", "Months 0-30", "Lifetime"), rbind(calc_costs_py(2), calc_costs_py(5), calc_costs_py(num_cycles)))
+infl_2024 <- 124.229 / 116.836
+df_cost_refs <- data.frame(
+  source = c(rep("Grodin 2026, Optum, ATTR-CM", 9), rep("Shoji 2026, GWTG-HF + Medicare, ATTR-CM, year after HF hospitalization", 4)),
+  measure = c("Admissions per person-year: all patients, 11,255 / 4,571 / 2.9 y", "Admissions per person-year: patients with >=1 admission, 3.3 / 2.9 y",
+              "Cost per admission, inpatient", "Cost per admission, inpatient + outpatient + ancillary",
+              "Annual hospitalization cost, inpatient (reported; denominator appears to be patients with >=1 admission)",
+              "Annual hospitalization cost, inpatient x 75.5% hospitalized (all patients, approximate)", "Annual hospitalization cost, admissions per person-year x inpatient cost per admission (all patients, approximate)",
+              "Medication cost per year, pharmacy claims (8.8% on disease-modifying therapy)", "Medication cost per year, matched non-amyloid heart failure cohort",
+              "Total Part A + B, 1 year", "Inpatient", "Skilled nursing facility", "Outpatient (Part B, no Part D)"),
+  reported = c(11255 / 4571 / 2.9, 3.3 / 2.9, 32960, 35983, 42868, 42868 * 0.755, 11255 / 4571 / 2.9 * 32960, 18340, 6930, 60373, 35109, 4398, 20866))
+df_cost_refs$q2_2026 <- ifelse(df_cost_refs$reported > 100, df_cost_refs$reported * infl_2024, df_cost_refs$reported)
+print(df_cost_model, row.names = FALSE, digits = 5); print(df_cost_refs, row.names = FALSE, digits = 5)
+
 ### Block 5. Does the model reproduce the mortality effect of treatment? ###
 # All on treatment vs all stopped at cycle 1, 30-month cumulative hazard ratio.
 # ATTR-ACT: 70.5% vs 57.1% alive at 30 months (ratio 0.625) and Cox HR 0.70 (Maurer et al., NEJM 2018).
@@ -216,5 +246,7 @@ write.csv(df_compare,  file.path(dir_val, "Verification_expected_value_V.1.5.csv
 write.csv(df_extreme,  file.path(dir_val, "Verification_extreme_values_V.1.5.csv"), row.names = FALSE)
 write.csv(df_seeds,    file.path(dir_val, "Verification_seeds_V.1.5.csv"), row.names = FALSE)
 write.csv(df_hosp,     file.path(dir_val, "Verification_hospitalization_rate_V.1.5.csv"), row.names = FALSE)
+write.csv(df_cost_model, file.path(dir_val, "Verification_cost_face_validity_model_V.1.5.csv"), row.names = FALSE)
+write.csv(df_cost_refs,  file.path(dir_val, "Verification_cost_face_validity_references_V.1.5.csv"), row.names = FALSE)
 write.csv(df_on_off,   file.path(dir_val, "Verification_on_off_treatment_V.1.5.csv"), row.names = FALSE)
 write.csv(df_scenario, file.path(dir_val, "Verification_off_treatment_scenario_V.1.5.csv"), row.names = FALSE)

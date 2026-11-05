@@ -2,8 +2,7 @@
 # in ATTR-CM. Health states: NYHA I-IV and death, 6-month cycles, lifetime horizon, US healthcare sector perspective.
 # Features: time-varying NYHA transitions, treatment discontinuation with a residual effect for the silencer,
 # cardiovascular hospitalization events, age/sex-specific Gompertz background mortality, and an excess-hazard
-# factor (theta) calibrated to real-world survival (Masri 2025 Kaplan-Meier curve), and future medical costs (unrelated care
-# while alive and the cost attributable to death). Outputs: costs, QALYs, life-years, ICER,
+# factor (theta) calibrated to real-world survival (Masri 2025 Kaplan-Meier curve). Outputs: costs, QALYs, life-years, ICER,
 # threshold price, subgroups, and a cost breakdown.
 
 rm(list = ls())
@@ -568,14 +567,20 @@ c_si_annual    <- c_vutrisiran_ASP
 c_st           <- c_st_annual * cycle_length # per cycle
 c_si           <- c_si_annual * cycle_length # per cycle
 
-## Health-state costs per cycle (ICER 2024; Wang et al. 2023), Q1 2024 USD inflated to Q2 2026 USD
-## with the BEA PCE health care services price index
-infl_factor    <- 124.229 / 116.774
-c_NYHA1_base   <- 2911  * infl_factor
-c_NYHA2_base   <- 4129  * infl_factor
-c_NYHA3_base   <- 6194  * infl_factor
-c_NYHA4_base   <- 10208 * infl_factor
+## Health-state costs per cycle: all-cause annual costs by NYHA class (Wang et al. 2023, obstructive HCM, 2022 USD):
+## emergency room + outpatient + other visits + pharmacy; hospitalizations are costed separately below.
+## Inflated to Q2 2026 USD with the BEA PCE health care services price index (2022 index from the ICER Excel model).
+## All-cause costs already include care unrelated to ATTR-CM, so future medical costs are not added (see below).
+infl_factor    <- 124.229 / 116.774 # Q1 2024 to Q2 2026
+infl_2022      <- 124.229 / 111.994 # 2022 to Q2 2026
+c_NYHA1_base   <- (709  + 17075 + 4995  + 3765)  * cycle_length * infl_2022
+c_NYHA2_base   <- (2166 + 27915 + 10349 + 5789)  * cycle_length * infl_2022
+c_NYHA3_base   <- (2647 + 21834 + 15950 + 10158) * cycle_length * infl_2022
+c_NYHA4_base   <- (4249 + 24965 + 33385 + 18103) * cycle_length * infl_2022
 c_D            <- 0
+# Scenario: values in the ICER 2024 model, Q1 2024 USD per cycle. ICER divides each annual visit cost by the annual visits
+# (e.g., NYHA I: 709/1.1 + 17075/28.3 + 4995/8.8 + 3765) and the Excel trace does not multiply by visits again
+v_costs_icer   <- c(2911, 4129, 6194, 10208) * infl_factor
 
 # State costs on treatment = state cost + net drug cost
 c_NYHA1_st     <- c_NYHA1_base + (c_st * (1 - c_discount_st))
@@ -608,19 +613,21 @@ v_hosp_probs_si <- v_hosp_probs_st
 v_hosp_costs    <- c("NYHA1" = 30584.15689, "NYHA2" = 17400.10754, "NYHA3" = 17694.56047, "NYHA4" = 21041.54226, "Death" = 0) * infl_factor
 v_hosp_disutils <- c("NYHA1" = 0.023, "NYHA2" = 0.01, "NYHA3" = 0.027, "NYHA4" = 0.07, "Death" = 0)
 
-## Future medical costs (Second Panel: Sanders et al., JAMA 2016), following Jiao & Basu, Value Health 2021;24(7):957-965, MEPS, 2019 USD.
+## Future medical costs, scenario only (Second Panel: Sanders et al., JAMA 2016), following Jiao & Basu, Value Health 2021;24(7):957-965, MEPS, 2019 USD.
 ## Unrelated: annual cost among survivors in the general population (Figure 1, read from its vector paths; values at 85 as printed; the last
 ## value applies from age 85). Their Equation 5 subtracts related cost x disease prevalence; ATTR-CM prevalence is very low, so this is ignored.
 ## Death: cost attributable to death = value at birth + change per year of age (Results, Analysis II); age capped at 85, the end of the curve.
 ## 2019 index from the ICER Excel model (Cost Adjustments sheet), same BEA series as above
 infl_2019 <- 124.229 / 103.663
 v_age_future <- seq(40, 85, by = 5)
-l_future_costs <- list(
+l_future_jiao <- list(
   male   = list(v_age = v_age_future, v_death = c(33370, -181) * infl_2019,
                 v_unrelated = c(4034, 4768, 5636, 6750, 8029, 9374, 10711, 12043, 13371, 14675) * infl_2019),
   female = list(v_age = v_age_future, v_death = c(61727, -534) * infl_2019,
                 v_unrelated = c(5476, 6216, 6962, 7894, 8908, 9945, 10989, 12020, 13007, 13979) * infl_2019)
 )
+# Base case: none, because the health-state costs are all-cause
+l_future_costs <- list(male = NULL, female = NULL)
 
 ### Mortality calibration (excess-hazard factor theta) ###
 # Target: Kaplan-Meier survival of the cohort that defines the model population: Masri et al., JACC CardioOncol

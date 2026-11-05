@@ -7,7 +7,7 @@ library(ggplot2)
 # If run alone, read the saved results
 if (!exists("dir_out")) dir_out <- "OWSA_output"
 if (!exists("owsa_results")) owsa_results <- read.csv(file.path(dir_out, "OWSA_results_V.1.5.csv"))
-if (!exists("base_owsa")) base_owsa <- c(ICER = 15522671) # base case ICER from TRACE_microsim_V.1.5.R
+if (!exists("base_owsa")) base_owsa <- c(ICER = 15504119) # base case ICER from TRACE_microsim_V.1.5.R
 
 # One row per input x bound (low / high)
 df_tornado <- rbind(

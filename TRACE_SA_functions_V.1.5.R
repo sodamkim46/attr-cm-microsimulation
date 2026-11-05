@@ -21,7 +21,7 @@ base_inputs <- list(
   hosp_rate_mult    = 1, # multiplies the 6-month hospitalization rate (scenario: ratio of annual rates between trials)
   hosp_cost_mult    = 1,
   hosp_disutil_mult = 1,
-  future_cost_mult  = 1, # multiplies future medical costs (0 = none, as in the ICER model)
+  future_cost_mult  = 0, # multiplies the Jiao & Basu future medical costs (0 = none, as in the base case)
   theta             = calibrated_theta,
   theta_off         = NULL, # theta after discontinuation; if NULL, same as theta
   p_disc_cycle_st   = NULL, # per-cycle (6-month) discontinuation; if set, used instead of the trial probability above
@@ -54,7 +54,7 @@ scale_trans_probs <- function(l_tv, mult) {
 
 ### Run one case: both arms x both sexes, then sex-weighted results ###
 # inp: list of inputs (start from base_inputs)
-# pop: optional smaller population, list(v_start, m_male, m_female); the PSA uses this
+# pop: optional other population, list(v_start, m_male, m_female), and optional prop_male; the PSA uses this
 run_owsa_case <- function(inp, pop = NULL) {
   if (is.null(pop)) pop <- list(v_start = v_starting_states, m_male = m_indi_features_male, m_female = m_indi_features_female)
   n_pop <- length(pop$v_start)
@@ -81,7 +81,7 @@ run_owsa_case <- function(inp, pop = NULL) {
   l_tx_case  <- scale_trans_probs(l_trans_probs_st_tv,  inp$trans_mult_tx) # silencer = stabilizer (equal efficacy)
   l_soc_case <- scale_trans_probs(l_trans_probs_soc_tv, inp$trans_mult_soc)
 
-  l_future_case <- lapply(l_future_costs, function(l) {
+  l_future_case <- if (inp$future_cost_mult == 0) l_future_costs else lapply(l_future_jiao, function(l) {
     l$v_unrelated <- l$v_unrelated * inp$future_cost_mult
     l$v_death <- l$v_death * inp$future_cost_mult
     l
@@ -124,7 +124,8 @@ run_owsa_case <- function(inp, pop = NULL) {
   r_si_f <- run_arm(pop$m_female, "female", "silencer")
 
   # 6. Sex-weighted results
-  wavg <- function(x_m, x_f) x_m * prop_male + x_f * prop_female
+  p_male <- if (is.null(pop$prop_male)) prop_male else pop$prop_male
+  wavg <- function(x_m, x_f) x_m * p_male + x_f * (1 - p_male)
   Dcosts_st <- wavg(r_st_m$mean_Dcosts, r_st_f$mean_Dcosts); Dcosts_si <- wavg(r_si_m$mean_Dcosts, r_si_f$mean_Dcosts)
   Dqalys_st <- wavg(r_st_m$mean_Dqalys, r_st_f$mean_Dqalys); Dqalys_si <- wavg(r_si_m$mean_Dqalys, r_si_f$mean_Dqalys)
   inc_c <- Dcosts_si - Dcosts_st
