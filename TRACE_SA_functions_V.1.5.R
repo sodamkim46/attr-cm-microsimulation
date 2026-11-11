@@ -26,6 +26,8 @@ base_inputs <- list(
   theta_off         = NULL, # theta after discontinuation; if NULL, same as theta
   p_disc_cycle_st   = NULL, # per-cycle (6-month) discontinuation; if set, used instead of the trial probability above
   p_disc_cycle_si   = NULL,
+  disc_max_cycle_st = Inf,  # last cycle in which patients can discontinue (Inf = every cycle, as in the base case)
+  disc_max_cycle_si = Inf,
   # PSA only: values by NYHA class (I-IV); if set, used instead of the multipliers above
   c_states          = NULL, # health state cost per cycle (inflated)
   c_hosp            = NULL, # cost per hospitalization (inflated)
@@ -62,6 +64,8 @@ run_owsa_case <- function(inp, pop = NULL) {
   # 1. Discontinuation per cycle: from the trial probability, unless a per-cycle value is given
   p_disc_st_case <- if (is.null(inp$p_disc_cycle_st)) 1 - (1 - inp$p_disc_2.5y_st)^(1/5) else inp$p_disc_cycle_st
   p_disc_si_case <- if (is.null(inp$p_disc_cycle_si)) 1 - (1 - inp$p_disc_3y_si)^(1/6) else inp$p_disc_cycle_si
+  disc_max_st_case <- if (is.null(inp$disc_max_cycle_st)) Inf else inp$disc_max_cycle_st
+  disc_max_si_case <- if (is.null(inp$disc_max_cycle_si)) Inf else inp$disc_max_cycle_si
 
   # 2. Costs: health state costs (SoC), then add the net drug cost for each arm
   c_states_case <- if (is.null(inp$c_states)) c(c_NYHA1_base, c_NYHA2_base, c_NYHA3_base, c_NYHA4_base) * inp$state_cost_mult else inp$c_states
@@ -114,6 +118,7 @@ run_owsa_case <- function(inp, pop = NULL) {
       cycle_length        = cycle_length,
       starting_seed       = seed,
       waning_years        = inp$waning_years,
+      disc_max_cycle      = if (is_si) disc_max_si_case else disc_max_st_case,
       l_future            = l_future_case[[sex]]
     )
   }

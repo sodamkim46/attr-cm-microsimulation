@@ -2,8 +2,9 @@
 # Base case: AE-related discontinuation from the pivotal trials
 #   Stabilizer: ATTRibute-CM, 9.3% over 30 months
 #   Silencer:   HELIOS-B, 3% over 36 months
-# Scenarios: ATTR-ACT and real-world persistence data
-# Everything else stays at base case (incl. theta and 1-year silencer waning)
+# Scenarios: ATTR-ACT and real-world persistence data; trial-based and real-world rates applied only during
+# each arm's trial period (stabilizer to 30 months, silencer to 36 months), with no discontinuation afterwards
+# Everything else stays at base case (incl. theta, 1-year silencer waning, and treatment ending on entry to NYHA4)
 
 # Step 1. Run the base case model and load the SA helper functions
 source("TRACE_microsim_V.1.5.R")
@@ -20,7 +21,12 @@ p_cycle_st_trial <- 1 - (1 - p_disc_2.5y_st)^(1/5)
 p_cycle_si_trial <- 1 - (1 - p_disc_3y_si)^(1/6)
 p_cycle_st_attract <- 1 - (1 - 0.212)^(1/5) # ATTR-ACT tafamidis pooled, 21.2% over 30 months
 
-# Each row: label, stabilizer per-cycle prob, silencer per-cycle prob
+# Trial periods in cycles: last cycle in which patients can discontinue in the trial-period scenarios
+n_trial_cycles_st <- 30 / 12 / cycle_length # ATTRibute-CM, 30 months = 5 cycles
+n_trial_cycles_si <- 36 / 12 / cycle_length # HELIOS-B, 36 months = 6 cycles
+
+# Each row: label, stabilizer per-cycle prob, silencer per-cycle prob,
+# optional last discontinuation cycle for stabilizer and silencer (default Inf = every cycle)
 disc_scenarios <- list(
   list("Base case (trial-based: ST ATTRibute-CM 9.3%/30mo, SI HELIOS-B 3%/36mo)", p_cycle_st_trial,    p_cycle_si_trial),
   list("ST ATTR-ACT (21.2%/30mo), SI HELIOS-B",                                  p_cycle_st_attract,  p_cycle_si_trial),
@@ -29,7 +35,12 @@ disc_scenarios <- list(
   list("Real-world upper: ST 22%/yr (German claims, incl. deaths), SI 20%/yr (Komodo, incl. restarts)", p12_to_cycle(0.22), p12_to_cycle(0.20)),
   # Change one arm at a time, to see which arm drives the result
   list("Real-world ST only (7%/yr), SI trial-based",                             p12_to_cycle(0.07),  p_cycle_si_trial),
-  list("Real-world SI only (12.6%/yr), ST trial-based",                          p_cycle_st_trial,    p12_to_cycle(0.126))
+  list("Real-world SI only (12.6%/yr), ST trial-based",                          p_cycle_st_trial,    p12_to_cycle(0.126)),
+  # Discontinuation only during the trial period (ST to 30 months, SI to 36 months), none afterwards
+  list("Trial-based, trial period only (ST to 30 mo, SI to 36 mo)",              p_cycle_st_trial,    p_cycle_si_trial,
+       n_trial_cycles_st, n_trial_cycles_si),
+  list("Real-world US: ST 7%/yr, SI 12.6%/yr, trial period only (ST to 30 mo, SI to 36 mo)", p12_to_cycle(0.07), p12_to_cycle(0.126),
+       n_trial_cycles_st, n_trial_cycles_si)
 )
 
 ### Step 3. Run each scenario ###
@@ -38,10 +49,16 @@ disc_results <- do.call(rbind, lapply(disc_scenarios, function(sc) {
   inp <- base_inputs
   inp$p_disc_cycle_st <- sc[[2]]
   inp$p_disc_cycle_si <- sc[[3]]
+  if (length(sc) >= 5) {
+    inp$disc_max_cycle_st <- sc[[4]]
+    inp$disc_max_cycle_si <- sc[[5]]
+  }
   r <- run_owsa_case(inp)
   data.frame(scenario         = sc[[1]],
              annual_disc_st   = 1 - (1 - sc[[2]])^(1 / cycle_length), # back to annual, for the table
              annual_disc_si   = 1 - (1 - sc[[3]])^(1 / cycle_length),
+             disc_until_month_st = inp$disc_max_cycle_st * cycle_length * 12, # Inf = every cycle
+             disc_until_month_si = inp$disc_max_cycle_si * cycle_length * 12,
              inc_Dcosts       = r["inc_Dcosts"],
              inc_Dqalys       = r["inc_Dqalys"],
              ICER             = r["ICER"],
